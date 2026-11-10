@@ -13,7 +13,13 @@ from typing import Any
 
 from playlister.auth import AuthError, build_ytmusic, resolve_auth
 from playlister.matcher import match_tracklist
-from playlister.present import public_hit, public_track, write_succeeded
+from playlister.present import (
+    lost_add_response,
+    partial_add,
+    public_hit,
+    public_track,
+    write_succeeded,
+)
 from playlister.redact import public_error
 
 logger = logging.getLogger("playlister")
@@ -234,18 +240,24 @@ class YouTubeMusic:
                 "skipped_duplicates": skipped,
             }
         added: list[str] = []
-        try:
-            for start in range(0, len(would_add), _ADD_CHUNK):
-                chunk = would_add[start : start + _ADD_CHUNK]
+        for start in range(0, len(would_add), _ADD_CHUNK):
+            chunk = would_add[start : start + _ADD_CHUNK]
+            try:
                 result = self._client.add_playlist_items(playlist_id, chunk, duplicates=False)
-                if not write_succeeded(result):
-                    return _partial_add(playlist_id, added, would_add, skipped)
-                added.extend(chunk)
-        except Exception as exc:
-            logger.info("add_playlist_tracks failed")
-            failure = _partial_add(playlist_id, added, would_add, skipped)
-            failure["error"] = public_error(exc)
-            return failure
+            except Exception as exc:
+                logger.info("add_playlist_tracks failed")
+                return lost_add_response(
+                    self.get_playlist(playlist_id, limit=0),
+                    playlist_id=playlist_id,
+                    added=added,
+                    chunk=chunk,
+                    would_add=would_add,
+                    skipped=skipped,
+                    error=public_error(exc),
+                )
+            if not write_succeeded(result):
+                return partial_add(playlist_id, added, would_add, skipped)
+            added.extend(chunk)
         logger.info("added %s tracks (skipped %s duplicates)", len(would_add), len(skipped))
         return {
             "ok": True,
@@ -255,22 +267,6 @@ class YouTubeMusic:
             "skipped_duplicates": skipped,
             "url": f"https://music.youtube.com/playlist?list={playlist_id}",
         }
-
-
-def _partial_add(
-    playlist_id: str,
-    added: list[str],
-    would_add: list[str],
-    skipped: list[str],
-) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error": "YouTube Music refused the add",
-        "playlist_id": playlist_id,
-        "added": added,
-        "not_added": would_add[len(added) :],
-        "skipped_duplicates": skipped,
-    }
 
 
 def set_client_factory(factory: Callable[[], YouTubeMusic] | None) -> None:

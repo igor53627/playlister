@@ -86,6 +86,23 @@ def test_missing_file_and_anonymous_default(tmp_path, monkeypatch):
     assert resolve_auth().kind == "anonymous"
 
 
+def test_prepare_auth_file_survives_an_unreadable_parent(monkeypatch):
+    from pathlib import Path
+
+    from playlister.auth import AuthError, prepare_auth_file, resolve_auth
+
+    def denied(self):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "is_file", denied)
+    monkeypatch.setenv("PLAYLISTER_AUTH_PATH", "/root/hidden/auth.json")
+    prepare_auth_file()
+    with pytest.raises(AuthError) as caught:
+        resolve_auth()
+    assert "could not be read" in str(caught.value)
+    assert "hidden" not in str(caught.value)
+
+
 def test_prepare_auth_file_tightens_without_reading_secrets(tmp_path, monkeypatch):
     from playlister.auth import prepare_auth_file
 

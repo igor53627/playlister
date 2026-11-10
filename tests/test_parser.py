@@ -39,6 +39,13 @@ def test_parses_messy_mixed_list():
     assert tracks[6].artist == "Oasis"
 
 
+def test_dash_inside_parentheses_does_not_split_a_by_line():
+    tracks = parse_tracklist("Wonderwall (Live - Wembley) by Oasis")
+    assert tracks[0].artist == "Oasis"
+    assert tracks[0].title == "Wonderwall (Live - Wembley)"
+    assert tracks[0].signals.live is True
+
+
 def test_dash_wins_over_the_word_by():
     tracks = parse_tracklist("Ben E. King — Stand by Me")
     assert tracks[0].artist == "Ben E. King"

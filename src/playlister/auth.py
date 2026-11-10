@@ -23,12 +23,24 @@ class AuthConfig:
     brand_account: str | None = field(default=None, repr=False)
 
 
+def _is_file(path: Path) -> bool:
+    """False when the path is missing or a parent directory cannot be entered.
+
+    ``Path.is_file`` raises ``PermissionError`` on Python 3.11 in that case.
+    Startup must not die on it.
+    """
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def auth_path_from_env() -> Path | None:
     raw = os.environ.get("PLAYLISTER_AUTH_PATH")
     if raw:
         return Path(raw).expanduser()
     default = Path.home() / ".config" / "playlister" / "auth.json"
-    if default.is_file():
+    if _is_file(default):
         return default
     return None
 
@@ -40,13 +52,13 @@ def prepare_auth_file() -> None:
     body is not read. A failure is logged and does not stop the server; the
     next authenticated tool call reports it.
     """
-    path = auth_path_from_env()
-    if path is None or not path.is_file():
-        return
     try:
+        path = auth_path_from_env()
+        if path is None or not _is_file(path):
+            return
         _tighten(path)
-    except AuthError as exc:
-        logging.getLogger("playlister").warning("%s", exc)
+    except (AuthError, OSError) as exc:
+        logging.getLogger("playlister").warning("%s", type(exc).__name__)
 
 
 def _tighten(path: Path) -> None:
@@ -73,7 +85,11 @@ def resolve_auth() -> AuthConfig:
     brand = os.environ.get("PLAYLISTER_BRAND_ACCOUNT") or None
     if path is None:
         return AuthConfig(path=None, kind="anonymous", brand_account=brand)
-    if not path.is_file():
+    try:
+        exists = path.is_file()
+    except OSError:
+        raise AuthError("Auth file could not be read") from None
+    if not exists:
         raise AuthError(
             "PLAYLISTER_AUTH_PATH does not point at a file. "
             "Create it with `ytmusicapi browser` or `ytmusicapi oauth` "

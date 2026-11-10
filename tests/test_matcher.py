@@ -146,6 +146,22 @@ def test_conflicting_recording_is_not_auto_matched():
     assert any("live" in query for query in row["queries"])
 
 
+def test_generic_remix_does_not_hide_a_different_mix():
+    def search(query, filter, limit):
+        if filter != "songs":
+            return []
+        return [
+            _song("plain-remix", "The Long and Winding Road (Remix)", "The Beatles", 220),
+            _song("dj-remix", "The Long and Winding Road (DJ Remix)", "The Beatles", 220),
+        ]
+
+    result = match_tracklist("The Beatles — The Long and Winding Road (Remix)", search)
+    row = result["tracks"][0]
+    assert row["status"] == "needs_review"
+    ids = {row["chosen"]["video_id"]} | {item["video_id"] for item in row["alternatives"]}
+    assert ids == {"plain-remix", "dj-remix"}
+
+
 def test_duplicate_release_does_not_hide_a_close_alternative():
     def search(query, filter, limit):
         if filter != "songs":

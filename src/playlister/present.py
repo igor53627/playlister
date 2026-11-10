@@ -38,6 +38,58 @@ def public_hit(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def partial_add(
+    playlist_id: str,
+    added: list[str],
+    would_add: list[str],
+    skipped: list[str],
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": "YouTube Music refused the add",
+        "playlist_id": playlist_id,
+        "added": added,
+        "not_added": would_add[len(added) :],
+        "skipped_duplicates": skipped,
+    }
+
+
+def lost_add_response(
+    refreshed: dict[str, Any],
+    *,
+    playlist_id: str,
+    added: list[str],
+    chunk: list[str],
+    would_add: list[str],
+    skipped: list[str],
+    error: str,
+) -> dict[str, Any]:
+    """A sent chunk whose reply never came back.
+
+    When the playlist can be re-read, ids now on it count as added. Otherwise
+    the in-flight chunk is ``uncertain`` and unsent ids stay in ``not_added``.
+    """
+    if refreshed.get("ok"):
+        present = {track["video_id"] for track in refreshed["tracks"]}
+        return {
+            "ok": False,
+            "error": error,
+            "playlist_id": playlist_id,
+            "added": [video_id for video_id in would_add if video_id in present],
+            "not_added": [video_id for video_id in would_add if video_id not in present],
+            "skipped_duplicates": skipped,
+        }
+    return {
+        "ok": False,
+        "error": error,
+        "playlist_id": playlist_id,
+        "added": added,
+        "uncertain": chunk,
+        "not_added": would_add[len(added) + len(chunk) :],
+        "skipped_duplicates": skipped,
+    }
+
+
 def public_track(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict) or not item.get("videoId"):
         return None

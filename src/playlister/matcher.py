@@ -106,6 +106,22 @@ def blocks_auto_match(query: TrackSignals, title: str) -> bool:
     return bool(query.version) and not candidate.version
 
 
+def _same_remix(left: str | None, right: str | None) -> bool:
+    """Identity of two hits. A bare "Remix" is not the same mix as "DJ Remix".
+
+    Request scoring still treats a generic remix ask as compatible with a named
+    one. That wildcard must not hide the other mix from review.
+    """
+    if not left and not right:
+        return True
+    if not left or not right:
+        return False
+    a, b = left.casefold(), right.casefold()
+    if a == "remix" or b == "remix":
+        return a == b
+    return a == b or a in b or b in a
+
+
 def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
     _, left_signals = extract_signals(left.title)
     _, right_signals = extract_signals(right.title)
@@ -113,9 +129,7 @@ def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
     radio_differs = left_signals.radio_edit != right_signals.radio_edit
     if live_differs or radio_differs:
         return False
-    if bool(left_signals.remix) != bool(right_signals.remix):
-        return False
-    if left_signals.remix and not remix_compatible(left_signals.remix, right_signals.remix):
+    if not _same_remix(left_signals.remix, right_signals.remix):
         return False
     if (left_signals.version or None) != (right_signals.version or None):
         return False

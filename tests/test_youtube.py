@@ -144,6 +144,48 @@ def test_library_listing_and_playlist_items_drop_private_fields():
     assert "thumbnails" not in playlist["tracks"][0]
 
 
+def test_lost_reply_is_reconciled_from_the_playlist():
+    fake = FakeYT()
+
+    def add(playlistId, videoIds=None, source_playlist=None, duplicates=False):
+        for video_id in videoIds or []:
+            fake.playlists[playlistId]["tracks"].append(
+                {"videoId": video_id, "title": video_id, "artists": []}
+            )
+        raise TimeoutError("response lost")
+
+    fake.add_playlist_items = add  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    result = yt.add_tracks("PLexisting", ["new1", "new2"], commit=True)
+    assert result["ok"] is False
+    assert result["added"] == ["new1", "new2"]
+    assert result["not_added"] == []
+    assert "uncertain" not in result
+
+
+def test_lost_reply_stays_uncertain_when_reread_fails():
+    fake = FakeYT()
+    reads = {"n": 0}
+    original = fake.get_playlist
+
+    def add(playlistId, videoIds=None, source_playlist=None, duplicates=False):
+        raise TimeoutError("response lost")
+
+    def flaky_read(*args, **kwargs):
+        reads["n"] += 1
+        if reads["n"] > 1:
+            raise TimeoutError("playlist read failed")
+        return original(*args, **kwargs)
+
+    fake.add_playlist_items = add  # type: ignore[method-assign]
+    fake.get_playlist = flaky_read  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    result = yt.add_tracks("PLexisting", ["new1"], commit=True)
+    assert result["added"] == []
+    assert result["uncertain"] == ["new1"]
+    assert result["not_added"] == []
+
+
 def test_partial_add_reports_completed_chunks():
     fake = FakeYT()
     calls = {"n": 0}

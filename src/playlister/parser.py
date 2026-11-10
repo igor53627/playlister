@@ -111,24 +111,42 @@ def _skip(line: str) -> bool:
     return stripped.casefold() in _HEADER
 
 
+def _outside_groups(line: str) -> str:
+    """Blank text inside () and [] so a dash there is not a separator."""
+    chars = list(line)
+    depth = 0
+    for index, char in enumerate(chars):
+        if char in "([":
+            depth += 1
+        elif char in ")]" and depth:
+            depth -= 1
+        elif depth:
+            chars[index] = " "
+    return "".join(chars)
+
+
 def _split_artist_title(line: str, order: str) -> tuple[str | None, str]:
-    # An explicit separator wins over the word "by", so "Ben E. King — Stand by Me"
-    # stays artist / title. "Title by Artist" is only the fallback.
-    pieces = [piece.strip() for piece in _DASH_SPLIT.split(line) if piece.strip()]
-    if len(pieces) >= 2:
-        left, right = pieces[0], " - ".join(pieces[1:])
-        if order == "title-artist":
-            return right, left
-        return left, right
+    # A separator outside parentheses wins over "by", so "Ben E. King — Stand by Me"
+    # stays artist / title. A dash inside "(Live - Wembley)" does not.
+    visible = _outside_groups(line)
+    dash = _DASH_SPLIT.search(visible)
+    if dash:
+        left, right = line[: dash.start()].strip(), line[dash.end() :].strip()
+        if left and right:
+            if order == "title-artist":
+                return right, left
+            return left, right
 
-    by_parts = _BY_SPLIT.split(line)
-    if len(by_parts) >= 2 and all(part.strip() for part in by_parts):
-        title = " by ".join(part.strip() for part in by_parts[:-1])
-        artist = by_parts[-1].strip()
-        return artist, title
+    by_matches = list(_BY_SPLIT.finditer(visible))
+    if by_matches:
+        match = by_matches[-1]
+        title, artist = line[: match.start()].strip(), line[match.end() :].strip()
+        if title and artist:
+            return artist, title
 
-    if ":" in line and "://" not in line:
-        left, right = (part.strip() for part in line.split(":", 1))
+    if ":" in visible and "://" not in line:
+        index = visible.find(":")
+        left, right = line[:index].strip(), line[index + 1 :].strip()
         if left and right:
             if order == "title-artist":
                 return right, left
