@@ -8,6 +8,7 @@ defaults to false: the same function previews the write.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -26,14 +27,49 @@ logger = logging.getLogger("playlister")
 
 PRIVACY = {"PRIVATE", "PUBLIC", "UNLISTED"}
 _ADD_CHUNK = 50
+# A new playlist is often missing its browse tree for a few seconds.
+# 0.5 + 1 + 2 + 4 = 7.5s, under the 10s cap. The add itself is not repeated.
+_BROWSE_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 4.0)
+_BROWSE_NOT_READY = "_browse_not_ready"
 
 _factory: Callable[[], YouTubeMusic] | None = None
+
+
+def _browse_not_ready(exc: BaseException) -> bool:
+    """True for the empty browse tree ytmusicapi raises while a playlist settles."""
+    if not isinstance(exc, KeyError | IndexError):
+        return False
+    text = str(exc)
+    if "Unable to find" not in text:
+        return False
+    return "contents" in text or "twoColumnBrowseResultsRenderer" in text
+
+
+def _structure_missing(raw: object) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    return "tracks" not in raw and not raw.get("id") and not raw.get("title")
+
+
+def _empty_playlist(playlist_id: str) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "playlist_id": playlist_id,
+        "title": None,
+        "description": "",
+        "privacy": None,
+        "track_count": 0,
+        "author": None,
+        "tracks": [],
+    }
 
 
 class YouTubeMusic:
     def __init__(self, client: Any, *, authenticated: bool) -> None:
         self._client = client
         self.authenticated = authenticated
+        self._sleep = time.sleep
+        self._fresh_playlists: set[str] = set()
 
     @classmethod
     def from_env(cls) -> YouTubeMusic:
@@ -110,33 +146,35 @@ class YouTubeMusic:
         return {"ok": True, "playlists": playlists}
 
     def get_playlist(self, playlist_id: str, limit: int = 100) -> dict[str, Any]:
-        try:
-            raw = self._client.get_playlist(
-                playlist_id,
-                limit=None if limit <= 0 else limit,
-                related=False,
-                suggestions_limit=0,
-            )
-        except Exception as exc:
-            return {"ok": False, "error": public_error(exc)}
-        if not isinstance(raw, dict):
-            return {"ok": False, "error": "Unexpected playlist response"}
-        tracks = []
-        for item in raw.get("tracks") or []:
-            public = public_track(item)
-            if public:
-                tracks.append(public)
-        author = raw.get("author") if isinstance(raw.get("author"), dict) else {}
-        return {
-            "ok": True,
-            "playlist_id": raw.get("id") or playlist_id,
-            "title": raw.get("title"),
-            "description": raw.get("description") or "",
-            "privacy": raw.get("privacy"),
-            "track_count": raw.get("trackCount"),
-            "author": author.get("name") if isinstance(author, dict) else None,
-            "tracks": tracks,
-        }
+        loaded = self._load_playlist(playlist_id, limit)
+        loaded.pop(_BROWSE_NOT_READY, None)
+        return loaded
+
+    def _load_playlist(self, playlist_id: str, limit: int) -> dict[str, Any]:
+        """Read a playlist, retrying only while its browse tree is not there yet."""
+        delays = _BROWSE_BACKOFF_SECONDS
+        last_error = "Unexpected playlist response"
+        for attempt in range(len(delays) + 1):
+            try:
+                raw = self._client.get_playlist(
+                    playlist_id,
+                    limit=None if limit <= 0 else limit,
+                    related=False,
+                    suggestions_limit=0,
+                )
+            except Exception as exc:
+                if not _browse_not_ready(exc):
+                    return {"ok": False, "error": public_error(exc)}
+                last_error = public_error(exc)
+            else:
+                if not _structure_missing(raw):
+                    return _present_playlist(raw, playlist_id)
+                last_error = "Unexpected playlist response"
+            if attempt == len(delays):
+                break
+            logger.info("playlist browse not ready; retrying")
+            self._sleep(delays[attempt])
+        return {"ok": False, "error": last_error, _BROWSE_NOT_READY: True}
 
     def create_playlist(
         self,
@@ -173,6 +211,7 @@ class YouTubeMusic:
         if not isinstance(created, str) or not created or created.startswith("{"):
             return {"ok": False, "error": "YouTube Music did not return a playlist id"}
         logger.info("created playlist privacy=%s", privacy)
+        self._fresh_playlists.add(created)
         return {
             "ok": True,
             "commit": True,
@@ -202,9 +241,15 @@ class YouTubeMusic:
         # Always drop ids already on the playlist and repeats in this request.
         # ytmusicapi rejects the whole batch when any id is already present, and
         # its duplicates flag does not mean "add them anyway".
-        current = self.get_playlist(playlist_id, limit=0)
+        current = self._load_playlist(playlist_id, limit=0)
         if not current.get("ok"):
-            return current
+            # The add is not repeated. A playlist this process just created can
+            # still be treated as empty so the first write is not blocked.
+            if current.get(_BROWSE_NOT_READY) and playlist_id in self._fresh_playlists:
+                current = _empty_playlist(playlist_id)
+            else:
+                current.pop(_BROWSE_NOT_READY, None)
+                return current
         existing = {track["video_id"] for track in current["tracks"]}
 
         would_add: list[str] = []
@@ -267,6 +312,27 @@ class YouTubeMusic:
             "skipped_duplicates": skipped,
             "url": f"https://music.youtube.com/playlist?list={playlist_id}",
         }
+
+
+def _present_playlist(raw: object, playlist_id: str) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"ok": False, "error": "Unexpected playlist response"}
+    tracks = []
+    for item in raw.get("tracks") or []:
+        public = public_track(item)
+        if public:
+            tracks.append(public)
+    author = raw.get("author") if isinstance(raw.get("author"), dict) else {}
+    return {
+        "ok": True,
+        "playlist_id": raw.get("id") or playlist_id,
+        "title": raw.get("title"),
+        "description": raw.get("description") or "",
+        "privacy": raw.get("privacy"),
+        "track_count": raw.get("trackCount"),
+        "author": author.get("name") if isinstance(author, dict) else None,
+        "tracks": tracks,
+    }
 
 
 def set_client_factory(factory: Callable[[], YouTubeMusic] | None) -> None:

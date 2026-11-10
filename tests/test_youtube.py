@@ -216,6 +216,124 @@ def test_failed_add_is_not_reported_as_success():
     assert "refused" in result["error"]
 
 
+_BROWSE_MISSING = KeyError(
+    "Unable to find 'contents' using path "
+    "['contents', 'twoColumnBrowseResultsRenderer', 'tabs', 0, 'tabRenderer']"
+)
+
+
+def _no_wait(yt: YouTubeMusic) -> list[float]:
+    delays: list[float] = []
+    yt._sleep = delays.append
+    return delays
+
+
+def test_playlist_browse_is_retried_then_read():
+    fake = FakeYT()
+    calls = {"n": 0}
+    original = fake.get_playlist
+
+    def flaky(playlistId, limit=100, related=False, suggestions_limit=0):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _BROWSE_MISSING
+        return original(playlistId, limit, related, suggestions_limit)
+
+    fake.get_playlist = flaky  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    delays = _no_wait(yt)
+    playlist = yt.get_playlist("PLexisting")
+    assert playlist["ok"] is True
+    assert playlist["tracks"][0]["video_id"] == "keep"
+    assert "_browse_not_ready" not in playlist
+    assert delays == [0.5, 1.0]
+    assert calls["n"] == 3
+
+
+def test_empty_browse_payload_is_retried():
+    fake = FakeYT()
+    calls = {"n": 0}
+    original = fake.get_playlist
+
+    def flaky(playlistId, limit=100, related=False, suggestions_limit=0):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {}
+        return original(playlistId, limit, related, suggestions_limit)
+
+    fake.get_playlist = flaky  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    delays = _no_wait(yt)
+    playlist = yt.get_playlist("PLexisting")
+    assert playlist["ok"] is True
+    assert delays == [0.5]
+    assert calls["n"] == 2
+
+
+def test_new_playlist_add_treats_an_unreadable_browse_as_empty():
+    fake = FakeYT()
+    adds: list[tuple] = []
+
+    def unreadable(*args, **kwargs):
+        raise _BROWSE_MISSING
+
+    def add(playlistId, videoIds=None, source_playlist=None, duplicates=False):
+        adds.append((playlistId, list(videoIds or []), duplicates))
+        return {"status": "STATUS_SUCCEEDED", "playlistEditResults": []}
+
+    fake.get_playlist = unreadable  # type: ignore[method-assign]
+    fake.add_playlist_items = add  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    delays = _no_wait(yt)
+    created = yt.create_playlist("Road", commit=True)
+    still_missing = yt.get_playlist(created["playlist_id"])
+    assert still_missing["ok"] is False
+    assert "tracks" not in still_missing
+    written = yt.add_tracks(created["playlist_id"], ["new1", "new2"], commit=True)
+    assert written["ok"] is True
+    assert written["added"] == ["new1", "new2"]
+    assert adds == [(created["playlist_id"], ["new1", "new2"], False)]
+    assert delays == [0.5, 1.0, 2.0, 4.0, 0.5, 1.0, 2.0, 4.0]
+
+
+def test_older_playlist_browse_failure_does_not_add():
+    fake = FakeYT()
+
+    def unreadable(*args, **kwargs):
+        raise _BROWSE_MISSING
+
+    fake.get_playlist = unreadable  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    delays = _no_wait(yt)
+    result = yt.add_tracks("PLexisting", ["new1"], commit=True)
+    assert result["ok"] is False
+    assert fake.added == []
+    assert delays == [0.5, 1.0, 2.0, 4.0]
+    assert "_browse_not_ready" not in result
+
+
+def test_unrelated_playlist_errors_are_not_retried():
+    fake = FakeYT()
+
+    def boom(*args, **kwargs):
+        raise TimeoutError("timed out")
+
+    fake.get_playlist = boom  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    delays = _no_wait(yt)
+    result = yt.get_playlist("PLexisting")
+    assert result["ok"] is False
+    assert delays == []
+
+    def other_key(*args, **kwargs):
+        raise KeyError("playlistId")
+
+    fake.get_playlist = other_key  # type: ignore[method-assign]
+    again = yt.get_playlist("PLexisting")
+    assert again["ok"] is False
+    assert delays == []
+
+
 def test_bad_privacy_is_rejected_without_a_write():
     fake = FakeYT()
     yt = YouTubeMusic(fake, authenticated=True)

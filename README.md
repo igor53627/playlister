@@ -190,7 +190,7 @@ The endpoint is `http://127.0.0.1:8765/mcp`. It is not reachable from another ma
 | `list_playlists` | no | Playlists in your library. Needs auth. |
 | `get_playlist` | no | One playlist and its tracks. `limit` 0 reads all of them. |
 | `create_playlist` | only if `commit` is true | Title, description, privacy (`PRIVATE` by default, or `UNLISTED` / `PUBLIC`). Without `commit`, returns what it would create. |
-| `add_playlist_tracks` | only if `commit` is true | Adds video ids, always skipping ones already on the playlist or repeated in the request. Without `commit`, returns `would_add` and `skipped_duplicates`. A refused chunk reports `added` and `not_added`. A lost reply is re-checked against the playlist, or returned as `uncertain` when that read also fails. |
+| `add_playlist_tracks` | only if `commit` is true | Adds video ids, always skipping ones already on the playlist or repeated in the request. Without `commit`, returns `would_add` and `skipped_duplicates`. A refused chunk reports `added` and `not_added`. A lost reply is re-checked against the playlist, or returned as `uncertain` when that read also fails. A playlist created a moment ago is re-read for a few seconds if YouTube has not published its browse tree; if it is still missing, dedupe treats that new playlist as empty. The add request itself is not retried. |
 
 A normal chat looks like this:
 
