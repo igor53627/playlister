@@ -10,6 +10,18 @@ from playlister.normalize import TrackSignals, extract_signals
 from playlister.parser import ParsedTrack, parse_clock
 from playlister.translit import skeleton
 
+# Fan uploads, concert captures, and reaction clips are not the studio track.
+# Live and cover are priced separately in ``_signal_delta``.
+_UNOFFICIAL_VIDEO = re.compile(
+    r"(?i)(?:"
+    r"fan[\s-]?cam|fancam|fan[\s-]?club|fanclub|"
+    r"\bfan\b|\bфан\b|"
+    r"\bconcert\b|\bконцерт\b|"
+    r"\breaction\b|"
+    r"\blive\b|\bcover\b"
+    r")"
+)
+
 _STRONG_VERSIONS = {
     "acoustic",
     "instrumental",
@@ -35,6 +47,9 @@ class ScoredCandidate:
     result_type: str
     score: float
     reasons: tuple[str, ...]
+    # Used to prefer a studio song over a video. Omitted from tool output.
+    title_similarity: float = 0.0
+    artist_similarity: float = 0.0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -49,11 +64,37 @@ class ScoredCandidate:
         }
 
 
+def _single_word_prefix_score(left: str, right: str) -> float | None:
+    """Cap a title that is only a prefix or infix of one longer word.
+
+    ``Айда`` inside ``Айдахар`` shares a stem and nothing else. That must not
+    look like a strong title match. A one-character typo is left to the
+    sequence comparison, and an extra whole word (``the`` before a title) is
+    not this case.
+    """
+    left_tokens = left.split()
+    right_tokens = right.split()
+    if len(left_tokens) != 1 or len(right_tokens) != 1:
+        return None
+    shorter, longer = sorted((left_tokens[0], right_tokens[0]), key=len)
+    extra = len(longer) - len(shorter)
+    if extra < 2:
+        return None
+    embedded = longer.startswith(shorter) or (len(shorter) >= 3 and shorter in longer)
+    if not embedded:
+        return None
+    # Above a vague sequence match, below a score that can be auto-matched.
+    return min(0.66, 0.45 + 0.5 * len(shorter) / len(longer))
+
+
 def _ratio(left: str, right: str) -> float:
     if not left or not right:
         return 0.0
     if left == right:
         return 1.0
+    prefix = _single_word_prefix_score(left, right)
+    if prefix is not None:
+        return prefix
     seq = SequenceMatcher(None, left, right).ratio()
     left_tokens = set(left.split())
     right_tokens = set(right.split())
@@ -157,6 +198,10 @@ def _signal_delta(query: TrackSignals, candidate: TrackSignals) -> tuple[float, 
         if candidate.version in _STRONG_VERSIONS:
             delta -= 0.2
             reasons.append(f"candidate is {candidate.version}")
+        elif candidate.version == "version":
+            # "Другая версия" / "old version" is a different edit, not a tie.
+            delta -= 0.12
+            reasons.append("candidate is another version")
         else:
             delta -= 0.05
             reasons.append(f"candidate version {candidate.version}")
@@ -242,6 +287,32 @@ def _album_of(item: dict) -> str | None:
     return None
 
 
+def _marker_family(token: str) -> str:
+    folded = token.casefold().replace("-", "").replace(" ", "")
+    if "fan" in folded or "фан" in folded:
+        return "fan"
+    if folded in {"concert", "концерт"}:
+        return "concert"
+    if folded == "reaction":
+        return "reaction"
+    if folded == "live":
+        return "live"
+    return folded
+
+
+def unofficial_video_marker(track: ParsedTrack, title: str, artists: list[str]) -> bool:
+    """True when a video title or channel is a fan, concert, or reaction upload.
+
+    Markers that are already in the requested title are not held against the hit.
+    Live and cover tags are excluded here; signal scoring handles those.
+    """
+    blob = f"{title} {' '.join(artists)}"
+    request = f"{track.title} {track.artist or ''}"
+    found = {_marker_family(match.group(0)) for match in _UNOFFICIAL_VIDEO.finditer(blob)}
+    asked = {_marker_family(match.group(0)) for match in _UNOFFICIAL_VIDEO.finditer(request)}
+    return bool(found - asked - {"live", "cover"})
+
+
 def score_hit(track: ParsedTrack, item: dict) -> ScoredCandidate | None:
     result_type = item.get("resultType") or item.get("result_type")
     if result_type not in {"song", "video"}:
@@ -283,8 +354,16 @@ def score_hit(track: ParsedTrack, item: dict) -> ScoredCandidate | None:
     if result_type == "video" and re.search(r"(?i)\blyrics?\b", title):
         type_delta -= 0.04
         reasons.append("lyrics video")
+    if result_type == "video" and unofficial_video_marker(track, title, artists):
+        type_delta -= 0.2
+        reasons.append("unofficial video")
 
     score = min(1.0, max(0.0, base + signal_delta + duration_delta + type_delta))
+    # A stem such as "Айда" inside "Айдахар" stays reviewable and cannot be
+    # pushed over the match line by a duration or song bonus.
+    if _single_word_prefix_score(skeleton(track.title_core), skeleton(core)) is not None:
+        score = min(score, 0.82)
+        reasons.append("title is a prefix of a longer word")
     return ScoredCandidate(
         video_id=video_id,
         title=title,
@@ -294,4 +373,6 @@ def score_hit(track: ParsedTrack, item: dict) -> ScoredCandidate | None:
         result_type=str(result_type),
         score=score,
         reasons=tuple(reasons),
+        title_similarity=title_sim,
+        artist_similarity=artist_sim,
     )

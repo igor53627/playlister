@@ -122,6 +122,21 @@ def _same_remix(left: str | None, right: str | None) -> bool:
     return a == b or a in b or b in a
 
 
+def _durations_compatible(left: int | None, right: int | None) -> bool:
+    """True when two copies look like the same edit.
+
+    Catalog rows for one song often disagree by half a minute. A gap past
+    about 50 seconds is a different edit and stays in the comparison.
+    """
+    if left is None or right is None:
+        return True
+    diff = abs(left - right)
+    if diff <= 12:
+        return True
+    short = min(left, right) or 1
+    return diff <= 50 and diff <= short * 0.4
+
+
 def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
     _, left_signals = extract_signals(left.title)
     _, right_signals = extract_signals(right.title)
@@ -137,17 +152,31 @@ def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
         return False
     if artist_similarity(left.artists, list(right.artists)) < 0.8:
         return False
-    if left.duration_seconds is None or right.duration_seconds is None:
-        return True
-    return abs(left.duration_seconds - right.duration_seconds) <= 8
+    return _durations_compatible(left.duration_seconds, right.duration_seconds)
 
 
-def _prefer_song(ranked: list[ScoredCandidate]) -> ScoredCandidate:
+def _comparable_song(item: ScoredCandidate, signals: TrackSignals | None) -> bool:
+    """A studio row of the same title and artist, not a different recording."""
+    if item.result_type != "song" or item.score < REVIEW_THRESHOLD:
+        return False
+    if item.title_similarity < 0.88 or item.artist_similarity < 0.8:
+        return False
+    return signals is None or not blocks_auto_match(signals, item.title)
+
+
+def _prefer_song(
+    ranked: list[ScoredCandidate], signals: TrackSignals | None = None
+) -> ScoredCandidate:
     best = ranked[0]
-    floor = best.score - SONG_PREFERENCE
-    songs = [item for item in ranked if item.result_type == "song" and item.score >= floor]
-    if best.result_type == "video" and songs:
+    if best.result_type != "video":
+        return best
+    songs = [item for item in ranked if _comparable_song(item, signals)]
+    if songs:
         return songs[0]
+    floor = best.score - SONG_PREFERENCE
+    close = [item for item in ranked if item.result_type == "song" and item.score >= floor]
+    if close:
+        return close[0]
     return best
 
 
@@ -159,7 +188,7 @@ def classify(
 ) -> tuple[str, ScoredCandidate | None]:
     if not ranked:
         return "not_found", None
-    chosen = _prefer_song(ranked)
+    chosen = _prefer_song(ranked, signals)
     others = [item for item in ranked if item.video_id != chosen.video_id]
     runner = next((item for item in others if not _same_recording(chosen, item)), None)
     margin = chosen.score - (runner.score if runner else 0.0)
@@ -253,7 +282,13 @@ def match_track(track: ParsedTrack, search: SearchFn, *, search_limit: int = 8) 
             tried.append(f"videos:{video_query}")
             _absorb(found, track, search(video_query, "videos", min(search_limit, 6)))
 
-    ranked = sorted(found.values(), key=lambda item: item.score, reverse=True)
+    # Equal scores are one recording's copies: song, then a row that names an
+    # album, then whichever hit was returned first.
+    ranked = sorted(
+        found.values(),
+        key=lambda item: (item.score, item.result_type == "song", bool(item.album)),
+        reverse=True,
+    )
     status, chosen = classify(ranked, had_artist=bool(track.artists), signals=track.signals)
     alternatives = [
         item.as_dict() for item in ranked if chosen is None or item.video_id != chosen.video_id

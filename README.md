@@ -201,7 +201,7 @@ A normal chat looks like this:
 
 `order` on the parse and match tools is `artist-title` (default) or `title-artist`. Lines written as `Title by Artist` are detected either way.
 
-Thresholds, as a guide: a song at or above 0.84 with a clear gap over the next different recording is `matched`. From 0.62 up, or a close call, is `needs_review`. Below that is `not_found`. A line with no artist is never auto-matched. Videos need a higher score than songs before they count as `matched`.
+Thresholds, as a guide: a song at or above 0.84 with a clear gap over the next different recording is `matched`. From 0.62 up, or a close call, is `needs_review`. Below that is `not_found`. A line with no artist is never auto-matched. A title that is only a prefix of a longer word (`Айда` versus `Айдахар`) is not a strong match. Videos need a higher score than songs, and a comparable studio song wins over a video of the same title. Fan, concert, and reaction uploads are penalized unless the request itself asks for them. Identical copies of one recording (same title and artist, about the same duration) are one candidate: the song with an album name is kept, and they do not count as a tie.
 
 ## Example
 

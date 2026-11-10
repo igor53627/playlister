@@ -158,6 +158,9 @@ def _apply_group(inner: str, signals: TrackSignals) -> bool:
         signals.remix = name or "remix"
         applied = True
     version = _version_name(inner)
+    if version is None and re.search(r"(?i)\b(?:version|версия|нұсқа)\b", inner):
+        # "old version", "Другая версия": a different edit, not part of the title.
+        version = "version"
     if version:
         signals.version = signals.version or version
         applied = True

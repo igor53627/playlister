@@ -190,6 +190,133 @@ def test_video_fallback_uses_the_latin_query():
     assert any(query.startswith("videos:") and "gruppa" in query for query in row["queries"])
 
 
+def _hit(video_id, title, artists, duration, album=None, result_type="song"):
+    return {
+        "resultType": result_type,
+        "videoId": video_id,
+        "title": title,
+        "artists": [{"name": name} for name in artists],
+        "duration_seconds": duration,
+        "album": {"name": album} if album else None,
+    }
+
+
+def test_title_stem_is_not_auto_matched():
+    def search(query, filter, limit):
+        if filter != "songs":
+            return []
+        return [
+            _hit("aidahar", "Айдахар", ["Ирина Кайратовна"], 186, "Айдахар"),
+            _hit("arriva", "Arriva", ["Ирина Кайратовна"], 285, "13 ВЫПУСК"),
+        ]
+
+    row = match_tracklist("Ирина Кайратовна — Айда", search)["tracks"][0]
+    assert row["status"] == "needs_review"
+    assert row["chosen"]["title"] == "Айдахар"
+    assert row["confidence"] < 0.84
+
+
+def test_studio_song_wins_over_a_fan_or_concert_video():
+    def search(query, filter, limit):
+        song = _hit("studio", "Daididau", ["Dimash Qudaibergen"], 250, "Daididau")
+        fan = _hit(
+            "fan",
+            "《Daididau》 Dimash y Alisher Karimov. Almaty 2013",
+            ["Dimash Kudaibergen Perú Dears Fan Club Oficial"],
+            279,
+            result_type="video",
+        )
+        official = _hit(
+            "mv",
+            "Dimash Qudaibergen - The Love of Tired Swans (Official Music Video)",
+            ["Dimash Qudaibergen"],
+            338,
+            result_type="video",
+        )
+        studio = _hit(
+            "swans",
+            "The Love of Tired Swans",
+            ["Dimash Qudaibergen"],
+            330,
+            "The Love of Tired Swans",
+        )
+        if "daididau" in query.casefold():
+            # The fan upload is in the song results on purpose, so a higher
+            # raw video score cannot hide the studio track.
+            return [fan, song] if filter == "songs" else [fan]
+        if filter == "videos":
+            return [official]
+        return [studio]
+
+    daididau = match_tracklist("Dimash Kudaibergen — Daididau", search)["tracks"][0]
+    assert daididau["status"] == "matched"
+    assert daididau["chosen"]["video_id"] == "studio"
+    assert daididau["chosen"]["result_type"] == "song"
+
+    swans = match_tracklist("Dimash Kudaibergen — Love of Tired Swans", search)["tracks"][0]
+    assert swans["chosen"]["video_id"] == "swans"
+    assert swans["chosen"]["result_type"] == "song"
+
+    def videos_only(query, filter, limit):
+        if filter != "videos":
+            return []
+        return [
+            _hit(
+                "fan",
+                "《Daididau》 Dimash y Alisher Karimov. Almaty 2013",
+                ["Dimash Kudaibergen Perú Dears Fan Club Oficial"],
+                279,
+                result_type="video",
+            )
+        ]
+
+    fan_only = match_tracklist("Dimash Kudaibergen — Daididau", videos_only)["tracks"][0]
+    assert fan_only["status"] == "needs_review"
+    assert fan_only["chosen"]["result_type"] == "video"
+
+
+def test_identical_copies_are_one_recording():
+    def search(query, filter, limit):
+        if filter != "songs":
+            return []
+        folded = query.casefold()
+        if "vecherinka" in folded or "вечеринка" in folded:
+            return [
+                _hit("plain-first", "Вечеринка", ["Скриптонит"], 364, None),
+                _hit("with-album", "Вечеринка", ["Скриптонит"], 364, "Дом с нормальными явлениями"),
+                _hit("copy", "Вечеринка", ["Скриптонит"], 366, "Romantic Collection"),
+                _hit("other", "Вечеринка (Другая версия)", ["Скриптонит"], 253, "Праздник"),
+            ]
+        return [
+            _hit(
+                "short",
+                "Той жыры",
+                ["Дос-Мукасан", "Мурат Кусаинов", "Мейрбек Молдабеков"],
+                133,
+                "Той жыры",
+            ),
+            _hit("long", "Той жыры", ["Дос - Мукасан"], 178, "Той жыры"),
+            _hit("old", "Той жыры (old version)", ["Дос - Мукасан"], 175, "Той жыры (old version)"),
+            _hit(
+                "alt",
+                "Той жыры (alternative version)",
+                ["Дос - Мукасан"],
+                198,
+                "Той жыры (alternative version)",
+            ),
+        ]
+
+    party = match_tracklist("Скриптонит — Вечеринка", search)["tracks"][0]
+    assert party["status"] == "matched"
+    # Same song and duration: the row that names an album beats the first copy.
+    assert party["chosen"]["video_id"] == "with-album"
+
+    wedding = match_tracklist("Dos-Mukasan — Той жыры", search)["tracks"][0]
+    assert wedding["status"] == "matched"
+    assert wedding["chosen"]["title"] == "Той жыры"
+    assert wedding["chosen"]["result_type"] == "song"
+
+
 def test_video_fallback_when_songs_are_weak():
     def search(query, filter, limit):
         if filter == "videos" and "rare" in query.casefold():
