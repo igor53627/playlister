@@ -104,6 +104,7 @@ def squash(text: str) -> str:
 
 
 def split_names(text: str) -> list[str]:
+    """Split a featured-artist list on commas, ampersands, and slashes."""
     text = _REMIX.sub(" ", text)
     text = re.sub(r"(?i)\b(?:edit|version|mix)\b", " ", text)
     parts = [squash(part) for part in _NAME_SPLIT.split(text)]
@@ -124,6 +125,7 @@ def primary_artists(artist: str | None) -> list[str]:
 
 
 def featured_artists(artist: str | None) -> list[str]:
+    """Names after feat., ft., or featuring on an artist credit."""
     if not artist:
         return []
     match = _FEAT_INLINE.search(artist)
@@ -232,6 +234,7 @@ def extract_signals(title: str) -> tuple[str, TrackSignals]:
     core = squash(title)
 
     def _replace(match: re.Match[str]) -> str:
+        """Drop a bracket group that is only a tag; keep other bracket text."""
         inner = match.group(1).strip()
         if _apply_group(inner, signals):
             return " "

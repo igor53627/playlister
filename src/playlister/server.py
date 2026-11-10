@@ -44,6 +44,7 @@ Privacy = Literal["PRIVATE", "UNLISTED", "PUBLIC"]
 
 
 def _fail(exc: Exception) -> dict[str, Any]:
+    """Tool error. Auth and value errors stay as written; others are redacted."""
     if isinstance(exc, (AuthError, ValueError)):
         return {"ok": False, "error": str(exc)}
     return {"ok": False, "error": public_error(exc)}
@@ -154,7 +155,8 @@ def add_playlist_tracks(
     fails, the in-flight chunk is returned as uncertain rather than not_added.
     A playlist created a moment ago may not be browsable yet. That read is
     retried for a few seconds. If it is still unreadable, dedupe treats the
-    new playlist as empty. The add itself is not retried.
+    new playlist as empty, until a write to it has been attempted. The add
+    itself is not retried.
     """
     try:
         return get_youtube().add_tracks(playlist_id, video_ids, commit=commit)

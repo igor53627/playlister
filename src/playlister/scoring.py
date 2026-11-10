@@ -88,6 +88,7 @@ def _single_word_prefix_score(left: str, right: str) -> float | None:
 
 
 def _ratio(left: str, right: str) -> float:
+    """Similarity of two folded strings. A stem of a longer word is capped."""
     if not left or not right:
         return 0.0
     if left == right:
@@ -115,6 +116,7 @@ def name_similarity(left: str, right: str) -> float:
 
 
 def artist_similarity(query: tuple[str, ...] | list[str], candidate: list[str]) -> float:
+    """How well the requested artists match the hit's artist names."""
     query_names = [name for name in query if name]
     candidate_names = [name for name in candidate if name]
     if not query_names or not candidate_names:
@@ -128,6 +130,7 @@ def artist_similarity(query: tuple[str, ...] | list[str], candidate: list[str]) 
 
 
 def _duration_delta(wanted: int | None, got: int | None) -> tuple[float, str | None]:
+    """Score bonus or penalty from the gap between requested and hit duration."""
     if wanted is None or got is None:
         return 0.0, None
     diff = abs(wanted - got)
@@ -152,6 +155,7 @@ def remix_compatible(left: str | None, right: str | None) -> bool:
 
 
 def _signal_delta(query: TrackSignals, candidate: TrackSignals) -> tuple[float, list[str]]:
+    """Score adjustment for live, remix, radio, version, remaster, and featured tags."""
     delta = 0.0
     reasons: list[str] = []
 
@@ -247,6 +251,7 @@ def _signal_delta(query: TrackSignals, candidate: TrackSignals) -> tuple[float, 
 
 
 def _artist_names(item: dict) -> list[str]:
+    """Artist display names from a ytmusicapi search hit."""
     names: list[str] = []
     artists = item.get("artists")
     if isinstance(artists, list):
@@ -267,6 +272,7 @@ def _artist_names(item: dict) -> list[str]:
 
 
 def _duration_of(item: dict) -> int | None:
+    """Duration in seconds from a hit, or None when it is missing."""
     seconds = item.get("duration_seconds")
     if isinstance(seconds, int):
         return seconds
@@ -279,6 +285,7 @@ def _duration_of(item: dict) -> int | None:
 
 
 def _album_of(item: dict) -> str | None:
+    """Album title from a hit, or None."""
     album = item.get("album")
     if isinstance(album, dict) and album.get("name"):
         return str(album["name"])
@@ -315,6 +322,7 @@ def unofficial_video_marker(track: ParsedTrack, title: str, artists: list[str]) 
 
 
 def score_hit(track: ParsedTrack, item: dict) -> ScoredCandidate | None:
+    """Score one song or video hit against a parsed track."""
     result_type = item.get("resultType") or item.get("result_type")
     if result_type not in {"song", "video"}:
         return None

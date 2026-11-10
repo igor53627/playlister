@@ -276,6 +276,66 @@ def test_playlist_without_a_tracks_key_is_not_an_empty_playlist():
     assert calls["n"] == 2
 
 
+def test_second_add_does_not_treat_a_written_playlist_as_empty():
+    clear_fresh_playlists()
+    fake = FakeYT()
+    calls = {"n": 0}
+
+    def unreadable(*args, **kwargs):
+        raise _BROWSE_MISSING
+
+    def add(playlistId, videoIds=None, source_playlist=None, duplicates=False):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return {"status": "STATUS_FAILED"}
+        return {"status": "STATUS_SUCCEEDED", "playlistEditResults": []}
+
+    fake.get_playlist = unreadable  # type: ignore[method-assign]
+    fake.add_playlist_items = add  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    _no_wait(yt)
+    created = yt.create_playlist("Road", commit=True)
+    playlist_id = created["playlist_id"]
+    preview = yt.add_tracks(playlist_id, ["keep"], commit=False)
+    assert preview["would_add"] == ["keep"]
+    assert is_fresh_playlist(playlist_id) is True
+
+    first = yt.add_tracks(playlist_id, ["keep"], commit=True)
+    assert first["ok"] is True
+    assert first["added"] == ["keep"]
+    assert is_fresh_playlist(playlist_id) is False
+
+    second = yt.add_tracks(playlist_id, ["keep", "new2"], commit=True)
+    assert second["ok"] is False
+    assert calls["n"] == 1
+    clear_fresh_playlists()
+
+
+def test_lost_add_reply_also_ends_the_empty_fallback():
+    clear_fresh_playlists()
+    fake = FakeYT()
+    calls = {"n": 0}
+
+    def unreadable(*args, **kwargs):
+        raise _BROWSE_MISSING
+
+    def add(playlistId, videoIds=None, source_playlist=None, duplicates=False):
+        calls["n"] += 1
+        raise TimeoutError("response lost")
+
+    fake.get_playlist = unreadable  # type: ignore[method-assign]
+    fake.add_playlist_items = add  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    _no_wait(yt)
+    created = yt.create_playlist("Road", commit=True)
+    first = yt.add_tracks(created["playlist_id"], ["keep"], commit=True)
+    assert first["ok"] is False
+    second = yt.add_tracks(created["playlist_id"], ["keep", "new2"], commit=True)
+    assert second["ok"] is False
+    assert calls["n"] == 1
+    clear_fresh_playlists()
+
+
 def test_fresh_playlist_mark_expires():
     clear_fresh_playlists()
     remember_fresh_playlist("PLnew", now=1_000.0)

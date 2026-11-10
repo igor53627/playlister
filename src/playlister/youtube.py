@@ -63,6 +63,11 @@ def clear_fresh_playlists() -> None:
     _fresh_until.clear()
 
 
+def forget_fresh_playlist(playlist_id: str) -> None:
+    """Drop the empty-browse fallback once a write to this playlist was attempted."""
+    _fresh_until.pop(playlist_id, None)
+
+
 def _browse_not_ready(exc: BaseException) -> bool:
     """True for the empty browse tree ytmusicapi raises while a playlist settles."""
     if not isinstance(exc, KeyError | IndexError):
@@ -111,6 +116,7 @@ class YouTubeMusic:
         return cls(client, authenticated=config.kind != "anonymous")
 
     def _require_auth(self) -> dict[str, Any] | None:
+        """Error payload when a write needs an auth file and none is loaded."""
         if self.authenticated:
             return None
         return {
@@ -123,6 +129,7 @@ class YouTubeMusic:
         }
 
     def search(self, query: str, filter: str = "songs", limit: int = 10) -> list[dict[str, Any]]:
+        """Catalog search. ``filter`` is ``songs`` or ``videos``."""
         if filter not in {"songs", "videos"}:
             raise ValueError("filter must be 'songs' or 'videos'")
         limit = max(1, min(int(limit), 20))
@@ -134,6 +141,7 @@ class YouTubeMusic:
         return list(raw or [])
 
     def search_public(self, query: str, filter: str = "songs", limit: int = 10) -> dict[str, Any]:
+        """Search results for a tool response, with private fields removed."""
         try:
             hits = self.search(query, filter=filter, limit=limit)
         except Exception as exc:
@@ -143,6 +151,7 @@ class YouTubeMusic:
     def match(
         self, text: str, order: str = "artist-title", search_limit: int = 8
     ) -> dict[str, Any]:
+        """Dry-run match of a tracklist using this client's search."""
         try:
             return match_tracklist(
                 text,
@@ -157,6 +166,7 @@ class YouTubeMusic:
             return {"ok": False, "error": public_error(exc)}
 
     def list_playlists(self, limit: int = 25) -> dict[str, Any]:
+        """Library playlists for an authenticated user."""
         denied = self._require_auth()
         if denied:
             return denied
@@ -320,6 +330,9 @@ class YouTubeMusic:
                 "added": [],
                 "skipped_duplicates": skipped,
             }
+        # The mutation is about to be sent. If its reply is lost, a later add
+        # must not assume the playlist is still empty and resend a duplicate.
+        forget_fresh_playlist(playlist_id)
         added: list[str] = []
         for start in range(0, len(would_add), _ADD_CHUNK):
             chunk = would_add[start : start + _ADD_CHUNK]
@@ -378,6 +391,7 @@ def set_client_factory(factory: Callable[[], YouTubeMusic] | None) -> None:
 
 
 def get_youtube() -> YouTubeMusic:
+    """Return the injected client, or one built from the local auth file."""
     if _factory is not None:
         return _factory()
     try:

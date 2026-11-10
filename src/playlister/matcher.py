@@ -52,6 +52,7 @@ def queries_for(track: ParsedTrack) -> list[str]:
     queries: list[str] = []
 
     def add(query: str) -> None:
+        """Append a query unless the same text is already queued."""
         cleaned = " ".join(query.split())
         if cleaned and cleaned.casefold() not in {item.casefold() for item in queries}:
             queries.append(cleaned)
@@ -78,6 +79,7 @@ def queries_for(track: ParsedTrack) -> list[str]:
 
 
 def _requested_tag(signals: TrackSignals) -> str | None:
+    """Remix, version, live, or radio-edit words to include in the catalog query."""
     if signals.remix:
         return "remix" if signals.remix == "remix" else signals.remix
     if signals.version:
@@ -140,6 +142,7 @@ def _durations_compatible(left: int | None, right: int | None) -> bool:
 
 
 def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
+    """True when two hits are the same edit, including copies with close durations."""
     _, left_signals = extract_signals(left.title)
     _, right_signals = extract_signals(right.title)
     live_differs = left_signals.live != right_signals.live
@@ -261,6 +264,7 @@ def classify(
 def _absorb(
     found: dict[str, ScoredCandidate], track: ParsedTrack, hits: list[dict[str, Any]]
 ) -> None:
+    """Score hits and keep the higher score when the same video id appears twice."""
     for hit in hits:
         scored = score_hit(track, hit)
         if scored is None:
@@ -294,6 +298,7 @@ def _video_queries(queries: list[str]) -> list[str]:
 
 
 def match_track(track: ParsedTrack, search: SearchFn, *, search_limit: int = 8) -> dict[str, Any]:
+    """Search songs, then videos if needed, and classify one parsed line."""
     found: dict[str, ScoredCandidate] = {}
     tried: list[str] = []
     queries = queries_for(track)
@@ -357,6 +362,7 @@ def match_tracklist(
     order: str = "artist-title",
     search_limit: int = 8,
 ) -> dict[str, Any]:
+    """Match every parsed line and count matched, needs_review, and not_found."""
     tracks = parse_tracklist(text, order=order)
     rows = [match_track(track, search, search_limit=search_limit) for track in tracks]
     summary = {
