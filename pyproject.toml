@@ -1,0 +1,61 @@
+[project]
+name = "playlister"
+version = "0.1.0"
+description = "Local MCP server that turns a chat tracklist into a YouTube Music playlist"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "playlister contributors" }]
+keywords = ["mcp", "youtube-music", "playlist", "ytmusicapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "mcp>=2.3,<3",
+    "ytmusicapi>=1.11.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/igor53627/playlister"
+Repository = "https://github.com/igor53627/playlister"
+Issues = "https://github.com/igor53627/playlister/issues"
+
+[project.scripts]
+playlister = "playlister.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/playlister"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["playlister"]
