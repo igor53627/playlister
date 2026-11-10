@@ -317,6 +317,41 @@ def test_identical_copies_are_one_recording():
     assert wedding["chosen"]["result_type"] == "song"
 
 
+def test_different_unidentified_versions_need_review():
+    def search(query, filter, limit):
+        if filter != "songs":
+            return []
+        return [
+            _song(
+                "ru",
+                "Song (новая русская версия)",
+                "Artist",
+                200,
+            )
+        ]
+
+    row = match_tracklist(
+        "Artist — Song (original English language version)",
+        search,
+    )["tracks"][0]
+    assert row["status"] == "needs_review"
+    assert "version matches" not in row["chosen"]["reasons"]
+    assert "version mismatch" in row["chosen"]["reasons"]
+
+
+def test_exact_video_beats_a_conflicting_song_edit():
+    def search(query, filter, limit):
+        song = _hit("old", "Wonderwall (old version)", ["Oasis"], 400, "Old")
+        video = _hit("exact", "Wonderwall", ["Oasis"], 259, result_type="video")
+        if filter == "videos":
+            return [video]
+        return [song]
+
+    row = match_tracklist("Oasis — Wonderwall 4:19", search)["tracks"][0]
+    assert row["chosen"]["video_id"] == "exact"
+    assert row["chosen"]["result_type"] == "video"
+
+
 def test_video_fallback_when_songs_are_weak():
     def search(query, filter, limit):
         if filter == "videos" and "rare" in query.casefold():

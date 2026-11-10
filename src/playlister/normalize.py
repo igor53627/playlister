@@ -19,6 +19,7 @@ _FEAT_WORD = r"(?:feat\.?|ft\.?|featuring)"
 _FEAT_GROUP = re.compile(rf"(?i)^{_FEAT_WORD}\s+(.+)$")
 _FEAT_INLINE = re.compile(rf"(?i)\s+(?:[-–—]\s*)?\b{_FEAT_WORD}\s+(.+)$")
 _RADIO = re.compile(r"(?i)\bradio\s+(?:edit|mix|version)\b")
+_VERSION_WORD = re.compile(r"(?i)\b(?:version|версия|нұсқа)\b")
 _REMASTER = re.compile(r"(?i)remaster")
 _LIVE_WORD = re.compile(r"(?i)\blive\b")
 _LIVE_PHRASE = re.compile(r"(?i)\blive\s+(?:at|in|from|version|session)\b.*$")
@@ -131,7 +132,36 @@ def featured_artists(artist: str | None) -> list[str]:
     return split_names(match.group(1))
 
 
+def _generic_version_label(inner: str) -> str:
+    """Words left after a version keyword, so two edits do not share one label.
+
+    A bare ``(version)`` stays the sentinel ``version``. That sentinel never
+    counts as equal to another copy of itself: the words that would identify
+    the edit were not there.
+    """
+    residual = squash(_VERSION_WORD.sub(" ", inner).strip(" -–—"))
+    if not residual:
+        return "version"
+    return residual.casefold()
+
+
+def versions_equal(left: str | None, right: str | None) -> bool:
+    """True when both labels name the same identified edit.
+
+    Missing labels and the unidentified sentinel are not a match.
+    """
+    if not left or not right or left == "version" or right == "version":
+        return False
+    return left == right
+
+
+def known_version(name: str | None) -> bool:
+    """True for a label produced by ``_VERSIONS``, such as ``album`` or ``acoustic``."""
+    return name in {label for _, label in _VERSIONS}
+
+
 def _apply_group(inner: str, signals: TrackSignals) -> bool:
+    """Record feat., radio, remix, and version tags found inside one bracket group."""
     feat = _FEAT_GROUP.match(inner.strip())
     if feat:
         signals.featured.extend(split_names(feat.group(1)))
@@ -158,9 +188,10 @@ def _apply_group(inner: str, signals: TrackSignals) -> bool:
         signals.remix = name or "remix"
         applied = True
     version = _version_name(inner)
-    if version is None and re.search(r"(?i)\b(?:version|версия|нұсқа)\b", inner):
-        # "old version", "Другая версия": a different edit, not part of the title.
-        version = "version"
+    # Radio edits and named phrases (_RADIO, _VERSIONS) win. Anything else
+    # keeps its own words: "original English language" is not "новая русская".
+    if version is None and not signals.radio_edit and _VERSION_WORD.search(inner):
+        version = _generic_version_label(inner)
     if version:
         signals.version = signals.version or version
         applied = True
@@ -173,6 +204,7 @@ def _apply_group(inner: str, signals: TrackSignals) -> bool:
 
 
 def _version_name(text: str) -> str | None:
+    """Return a known version name, or None when the phrase is not in ``_VERSIONS``."""
     for phrase, name in _VERSIONS:
         if re.search(rf"(?i)\b{re.escape(phrase)}\b", text):
             return name

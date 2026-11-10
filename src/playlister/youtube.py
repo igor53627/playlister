@@ -32,7 +32,35 @@ _ADD_CHUNK = 50
 _BROWSE_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 4.0)
 _BROWSE_NOT_READY = "_browse_not_ready"
 
+# Ids created in this process, shared by every YouTubeMusic instance the
+# server builds. A later tool call must still know the playlist is new.
+_FRESH_TTL_SECONDS = 60.0
+_fresh_until: dict[str, float] = {}
+
 _factory: Callable[[], YouTubeMusic] | None = None
+
+
+def remember_fresh_playlist(playlist_id: str, *, now: float | None = None) -> None:
+    """Remember a playlist id created here, for about a minute."""
+    stamp = time.monotonic() if now is None else now
+    _fresh_until[playlist_id] = stamp + _FRESH_TTL_SECONDS
+
+
+def is_fresh_playlist(playlist_id: str, *, now: float | None = None) -> bool:
+    """True while that id is still inside the just-created window."""
+    deadline = _fresh_until.get(playlist_id)
+    if deadline is None:
+        return False
+    stamp = time.monotonic() if now is None else now
+    if stamp > deadline:
+        _fresh_until.pop(playlist_id, None)
+        return False
+    return True
+
+
+def clear_fresh_playlists() -> None:
+    """Drop the just-created cache. Tests call this between cases."""
+    _fresh_until.clear()
 
 
 def _browse_not_ready(exc: BaseException) -> bool:
@@ -46,12 +74,18 @@ def _browse_not_ready(exc: BaseException) -> bool:
 
 
 def _structure_missing(raw: object) -> bool:
+    """True when a dict has no tracks list, even if it already has an id or title.
+
+    An empty playlist from ytmusicapi includes ``tracks: []``. A payload that
+    omits the key is an unfinished browse, not a playlist with no songs.
+    """
     if not isinstance(raw, dict):
         return False
-    return "tracks" not in raw and not raw.get("id") and not raw.get("title")
+    return "tracks" not in raw
 
 
 def _empty_playlist(playlist_id: str) -> dict[str, Any]:
+    """Dedupe view used when a just-created playlist never becomes readable."""
     return {
         "ok": True,
         "playlist_id": playlist_id,
@@ -69,7 +103,6 @@ class YouTubeMusic:
         self._client = client
         self.authenticated = authenticated
         self._sleep = time.sleep
-        self._fresh_playlists: set[str] = set()
 
     @classmethod
     def from_env(cls) -> YouTubeMusic:
@@ -146,6 +179,7 @@ class YouTubeMusic:
         return {"ok": True, "playlists": playlists}
 
     def get_playlist(self, playlist_id: str, limit: int = 100) -> dict[str, Any]:
+        """Read one playlist, retrying while YouTube's browse tree is missing."""
         loaded = self._load_playlist(playlist_id, limit)
         loaded.pop(_BROWSE_NOT_READY, None)
         return loaded
@@ -184,6 +218,7 @@ class YouTubeMusic:
         *,
         commit: bool = False,
     ) -> dict[str, Any]:
+        """Create a playlist. ``commit`` false returns the plan and writes nothing."""
         privacy = (privacy or "PRIVATE").upper()
         if privacy not in PRIVACY:
             return {"ok": False, "error": "privacy must be PRIVATE, UNLISTED, or PUBLIC"}
@@ -211,7 +246,7 @@ class YouTubeMusic:
         if not isinstance(created, str) or not created or created.startswith("{"):
             return {"ok": False, "error": "YouTube Music did not return a playlist id"}
         logger.info("created playlist privacy=%s", privacy)
-        self._fresh_playlists.add(created)
+        remember_fresh_playlist(created)
         return {
             "ok": True,
             "commit": True,
@@ -228,6 +263,7 @@ class YouTubeMusic:
         *,
         commit: bool = False,
     ) -> dict[str, Any]:
+        """Add video ids. ``commit`` false previews. The add call itself is not retried."""
         playlist_id = playlist_id.strip()
         if not playlist_id:
             return {"ok": False, "error": "playlist_id is required"}
@@ -245,7 +281,7 @@ class YouTubeMusic:
         if not current.get("ok"):
             # The add is not repeated. A playlist this process just created can
             # still be treated as empty so the first write is not blocked.
-            if current.get(_BROWSE_NOT_READY) and playlist_id in self._fresh_playlists:
+            if current.get(_BROWSE_NOT_READY) and is_fresh_playlist(playlist_id):
                 current = _empty_playlist(playlist_id)
             else:
                 current.pop(_BROWSE_NOT_READY, None)
@@ -315,6 +351,7 @@ class YouTubeMusic:
 
 
 def _present_playlist(raw: object, playlist_id: str) -> dict[str, Any]:
+    """Turn a ytmusicapi playlist payload into the public tool shape."""
     if not isinstance(raw, dict):
         return {"ok": False, "error": "Unexpected playlist response"}
     tracks = []

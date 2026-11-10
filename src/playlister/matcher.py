@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from playlister.normalize import TrackSignals, extract_signals
+from playlister.normalize import TrackSignals, extract_signals, versions_equal
 from playlister.parser import ParsedTrack, parse_tracklist
 from playlister.scoring import (
     ScoredCandidate,
@@ -99,6 +99,8 @@ def blocks_auto_match(query: TrackSignals, title: str) -> bool:
         return True
     if (query.remix or candidate.remix) and not remix_compatible(query.remix, candidate.remix):
         return True
+    if query.version and candidate.version and not versions_equal(query.version, candidate.version):
+        return True
     query_strong = query.version in _STRONG_VERSIONS
     candidate_strong = candidate.version in _STRONG_VERSIONS
     if (query_strong or candidate_strong) and query.version != candidate.version:
@@ -146,7 +148,11 @@ def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
         return False
     if not _same_remix(left_signals.remix, right_signals.remix):
         return False
-    if (left_signals.version or None) != (right_signals.version or None):
+    left_version = left_signals.version
+    right_version = right_signals.version
+    if bool(left_version) != bool(right_version):
+        return False
+    if left_version and right_version and not versions_equal(left_version, right_version):
         return False
     if name_similarity(left.title, right.title) < 0.92:
         return False
@@ -164,17 +170,49 @@ def _comparable_song(item: ScoredCandidate, signals: TrackSignals | None) -> boo
     return signals is None or not blocks_auto_match(signals, item.title)
 
 
+def _song_can_replace_video(
+    song: ScoredCandidate,
+    signals: TrackSignals | None,
+    wanted_duration: int | None,
+) -> bool:
+    """False when the song is another edit, or its duration misses the request."""
+    if signals is not None and blocks_auto_match(signals, song.title):
+        return False
+    _, got = extract_signals(song.title)
+    asked = None if signals is None else signals.version
+    if got.version and not versions_equal(asked, got.version):
+        return False
+    if wanted_duration is None or song.duration_seconds is None:
+        return True
+    return abs(song.duration_seconds - wanted_duration) <= 30
+
+
 def _prefer_song(
-    ranked: list[ScoredCandidate], signals: TrackSignals | None = None
+    ranked: list[ScoredCandidate],
+    signals: TrackSignals | None = None,
+    wanted_duration: int | None = None,
 ) -> ScoredCandidate:
+    """Prefer a studio song over a video of the same recording.
+
+    A song that is a different edit, or far from the requested duration, does
+    not take the place of a video that already fits.
+    """
     best = ranked[0]
     if best.result_type != "video":
         return best
-    songs = [item for item in ranked if _comparable_song(item, signals)]
+
+    def usable(item: ScoredCandidate) -> bool:
+        return _song_can_replace_video(item, signals, wanted_duration)
+
+    songs = [item for item in ranked if _comparable_song(item, signals) and usable(item)]
     if songs:
         return songs[0]
     floor = best.score - SONG_PREFERENCE
-    close = [item for item in ranked if item.result_type == "song" and item.score >= floor]
+    close = [
+        item
+        for item in ranked
+        if item.result_type == "song" and item.score >= floor and usable(item)
+    ]
     if close:
         return close[0]
     return best
@@ -185,10 +223,12 @@ def classify(
     *,
     had_artist: bool,
     signals: TrackSignals | None = None,
+    duration_seconds: int | None = None,
 ) -> tuple[str, ScoredCandidate | None]:
+    """Bucket a ranked list as matched, needs_review, or not_found."""
     if not ranked:
         return "not_found", None
-    chosen = _prefer_song(ranked, signals)
+    chosen = _prefer_song(ranked, signals, duration_seconds)
     others = [item for item in ranked if item.video_id != chosen.video_id]
     runner = next((item for item in others if not _same_recording(chosen, item)), None)
     margin = chosen.score - (runner.score if runner else 0.0)
@@ -289,7 +329,12 @@ def match_track(track: ParsedTrack, search: SearchFn, *, search_limit: int = 8) 
         key=lambda item: (item.score, item.result_type == "song", bool(item.album)),
         reverse=True,
     )
-    status, chosen = classify(ranked, had_artist=bool(track.artists), signals=track.signals)
+    status, chosen = classify(
+        ranked,
+        had_artist=bool(track.artists),
+        signals=track.signals,
+        duration_seconds=track.duration_seconds,
+    )
     alternatives = [
         item.as_dict() for item in ranked if chosen is None or item.video_id != chosen.video_id
     ][:3]

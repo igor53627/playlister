@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from playlister.normalize import TrackSignals, extract_signals
+from playlister.normalize import TrackSignals, extract_signals, known_version, versions_equal
 from playlister.parser import ParsedTrack, parse_clock
 from playlister.translit import skeleton
 
@@ -188,7 +188,7 @@ def _signal_delta(query: TrackSignals, candidate: TrackSignals) -> tuple[float, 
         reasons.append("radio edit matches")
 
     if query.version and candidate.version:
-        if query.version == candidate.version:
+        if versions_equal(query.version, candidate.version):
             delta += 0.06
             reasons.append("version matches")
         else:
@@ -198,13 +198,13 @@ def _signal_delta(query: TrackSignals, candidate: TrackSignals) -> tuple[float, 
         if candidate.version in _STRONG_VERSIONS:
             delta -= 0.2
             reasons.append(f"candidate is {candidate.version}")
-        elif candidate.version == "version":
-            # "Другая версия" / "old version" is a different edit, not a tie.
-            delta -= 0.12
-            reasons.append("candidate is another version")
-        else:
+        elif known_version(candidate.version):
             delta -= 0.05
             reasons.append(f"candidate version {candidate.version}")
+        else:
+            # "old version" / "Другая версия": a different edit, not a tie.
+            delta -= 0.12
+            reasons.append("candidate is another version")
     elif query.version and not candidate.version:
         delta -= 0.12
         reasons.append("candidate missing version tag")
@@ -288,6 +288,7 @@ def _album_of(item: dict) -> str | None:
 
 
 def _marker_family(token: str) -> str:
+    """Collapse fan-club, concert, and reaction spellings into one penalty family."""
     folded = token.casefold().replace("-", "").replace(" ", "")
     if "fan" in folded or "фан" in folded:
         return "fan"

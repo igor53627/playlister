@@ -1,4 +1,9 @@
-from playlister.youtube import YouTubeMusic
+from playlister.youtube import (
+    YouTubeMusic,
+    clear_fresh_playlists,
+    is_fresh_playlist,
+    remember_fresh_playlist,
+)
 
 
 class FakeYT:
@@ -248,6 +253,35 @@ def test_playlist_browse_is_retried_then_read():
     assert "_browse_not_ready" not in playlist
     assert delays == [0.5, 1.0]
     assert calls["n"] == 3
+
+
+def test_playlist_without_a_tracks_key_is_not_an_empty_playlist():
+    fake = FakeYT()
+    calls = {"n": 0}
+    original = fake.get_playlist
+
+    def flaky(playlistId, limit=100, related=False, suggestions_limit=0):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"id": playlistId, "title": "Already"}
+        return original(playlistId, limit, related, suggestions_limit)
+
+    fake.get_playlist = flaky  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    delays = _no_wait(yt)
+    playlist = yt.get_playlist("PLexisting")
+    assert playlist["ok"] is True
+    assert playlist["tracks"][0]["video_id"] == "keep"
+    assert delays == [0.5]
+    assert calls["n"] == 2
+
+
+def test_fresh_playlist_mark_expires():
+    clear_fresh_playlists()
+    remember_fresh_playlist("PLnew", now=1_000.0)
+    assert is_fresh_playlist("PLnew", now=1_059.0) is True
+    assert is_fresh_playlist("PLnew", now=1_061.0) is False
+    clear_fresh_playlists()
 
 
 def test_empty_browse_payload_is_retried():

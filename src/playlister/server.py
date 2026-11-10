@@ -150,7 +150,7 @@ def add_playlist_tracks(
     alternative they picked). Duplicates are always removed first: YouTube
     Music rejects the whole batch if any id is already present. If a later
     chunk fails, added lists the ids that were written and not_added lists
-    the rest.     If a reply is lost, the playlist is re-read; when that also
+    the rest. If a reply is lost, the playlist is re-read; when that also
     fails, the in-flight chunk is returned as uncertain rather than not_added.
     A playlist created a moment ago may not be browsable yet. That read is
     retried for a few seconds. If it is still unreadable, dedupe treats the
