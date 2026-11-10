@@ -181,7 +181,6 @@ class YouTubeMusic:
         playlist_id: str,
         video_ids: list[str],
         *,
-        dedupe: bool = True,
         commit: bool = False,
     ) -> dict[str, Any]:
         playlist_id = playlist_id.strip()
@@ -194,18 +193,19 @@ class YouTubeMusic:
         if not cleaned:
             return {"ok": False, "error": "video_ids is empty"}
 
-        existing: set[str] = set()
-        if dedupe:
-            current = self.get_playlist(playlist_id, limit=0)
-            if not current.get("ok"):
-                return current
-            existing = {track["video_id"] for track in current["tracks"]}
+        # Always drop ids already on the playlist and repeats in this request.
+        # ytmusicapi rejects the whole batch when any id is already present, and
+        # its duplicates flag does not mean "add them anyway".
+        current = self.get_playlist(playlist_id, limit=0)
+        if not current.get("ok"):
+            return current
+        existing = {track["video_id"] for track in current["tracks"]}
 
         would_add: list[str] = []
         skipped: list[str] = []
         seen: set[str] = set()
         for video_id in cleaned:
-            if video_id in seen or (dedupe and video_id in existing):
+            if video_id in seen or video_id in existing:
                 skipped.append(video_id)
                 seen.add(video_id)
                 continue
@@ -233,15 +233,19 @@ class YouTubeMusic:
                 "added": [],
                 "skipped_duplicates": skipped,
             }
+        added: list[str] = []
         try:
             for start in range(0, len(would_add), _ADD_CHUNK):
                 chunk = would_add[start : start + _ADD_CHUNK]
                 result = self._client.add_playlist_items(playlist_id, chunk, duplicates=False)
                 if not write_succeeded(result):
-                    return {"ok": False, "error": "YouTube Music refused the add"}
+                    return _partial_add(playlist_id, added, would_add, skipped)
+                added.extend(chunk)
         except Exception as exc:
             logger.info("add_playlist_tracks failed")
-            return {"ok": False, "error": public_error(exc)}
+            failure = _partial_add(playlist_id, added, would_add, skipped)
+            failure["error"] = public_error(exc)
+            return failure
         logger.info("added %s tracks (skipped %s duplicates)", len(would_add), len(skipped))
         return {
             "ok": True,
@@ -251,6 +255,22 @@ class YouTubeMusic:
             "skipped_duplicates": skipped,
             "url": f"https://music.youtube.com/playlist?list={playlist_id}",
         }
+
+
+def _partial_add(
+    playlist_id: str,
+    added: list[str],
+    would_add: list[str],
+    skipped: list[str],
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": "YouTube Music refused the add",
+        "playlist_id": playlist_id,
+        "added": added,
+        "not_added": would_add[len(added) :],
+        "skipped_duplicates": skipped,
+    }
 
 
 def set_client_factory(factory: Callable[[], YouTubeMusic] | None) -> None:

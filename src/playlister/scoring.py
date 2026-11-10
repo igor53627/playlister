@@ -99,12 +99,15 @@ def _duration_delta(wanted: int | None, got: int | None) -> tuple[float, str | N
     return -0.18, f"duration differs by {diff}s"
 
 
-def _remix_compatible(left: str | None, right: str | None) -> bool:
+def remix_compatible(left: str | None, right: str | None) -> bool:
+    """True when two remix labels name the same mix. Comparison is case-insensitive."""
     if not left or not right:
         return False
-    if left == right or left == "remix" or right == "remix":
+    left_key = left.casefold()
+    right_key = right.casefold()
+    if left_key == right_key or left_key == "remix" or right_key == "remix":
         return True
-    return left in right or right in left
+    return left_key in right_key or right_key in left_key
 
 
 def _signal_delta(query: TrackSignals, candidate: TrackSignals) -> tuple[float, list[str]]:
@@ -123,7 +126,7 @@ def _signal_delta(query: TrackSignals, candidate: TrackSignals) -> tuple[float, 
         reasons.append("live matches")
 
     if query.remix or candidate.remix:
-        if _remix_compatible(query.remix, candidate.remix):
+        if remix_compatible(query.remix, candidate.remix):
             delta += 0.08
             reasons.append("remix matches")
         elif candidate.remix and not query.remix:

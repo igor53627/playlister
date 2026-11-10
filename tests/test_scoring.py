@@ -40,6 +40,15 @@ def test_remaster_request_still_accepts_the_original():
     assert remaster.score >= original.score
 
 
+def test_remix_names_match_regardless_of_case():
+    track = _track("Oasis — Wonderwall (kygo remix)")
+    remix = score_hit(track, _hit(videoId="ky", title="Wonderwall (Kygo Remix)"))
+    plain = score_hit(track, _hit())
+    assert remix is not None and plain is not None
+    assert remix.score > plain.score
+    assert "remix matches" in remix.reasons
+
+
 def test_remix_and_live_prefer_the_tagged_recording():
     remix_query = _track("Oasis — Wonderwall (Kygo Remix)")
     plain = score_hit(remix_query, _hit())

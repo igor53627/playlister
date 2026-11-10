@@ -116,7 +116,9 @@ _LATIN_FOLD = str.maketrans(
 )
 
 _CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
-_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+# Drop punctuation, but keep letters we do not transliterate (Hangul, CJK,
+# Arabic, Greek) so an exact non-Latin title can still match itself.
+_NON_ALNUM = re.compile(r"[^\w]+", re.UNICODE)
 
 
 def has_cyrillic(text: str) -> bool:
@@ -145,6 +147,6 @@ def skeleton(text: str) -> str:
     different words better than a one-letter code would.
     """
     latin = to_latin(text).replace("kh", "h").replace("q", "k")
-    latin = latin.replace("ß", "ss")
+    latin = latin.replace("ß", "ss").replace("_", " ")
     cleaned = _NON_ALNUM.sub(" ", latin)
     return " ".join(cleaned.split())

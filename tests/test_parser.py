@@ -39,6 +39,21 @@ def test_parses_messy_mixed_list():
     assert tracks[6].artist == "Oasis"
 
 
+def test_dash_wins_over_the_word_by():
+    tracks = parse_tracklist("Ben E. King — Stand by Me")
+    assert tracks[0].artist == "Ben E. King"
+    assert tracks[0].title == "Stand by Me"
+
+
+def test_comma_does_not_invent_an_artist():
+    goodbye = parse_tracklist("Hello, Goodbye")
+    assert goodbye[0].artist is None
+    assert goodbye[0].title == "Hello, Goodbye"
+    creator = parse_tracklist("Tyler, The Creator")
+    assert creator[0].artist is None
+    assert creator[0].title == "Tyler, The Creator"
+
+
 def test_stand_by_me_splits_on_the_last_by():
     tracks = parse_tracklist("Stand by Me by Ben E. King")
     assert tracks[0].title == "Stand by Me"

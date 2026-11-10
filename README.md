@@ -22,7 +22,7 @@ Matching is the product. The server normalizes case and punctuation, splits `fea
 - **Your process.** The default transport is stdio: the MCP client starts `playlister` and talks over stdin/stdout. Nothing listens on a port.
 - **Optional HTTP is localhost only.** `playlister --transport http` binds `127.0.0.1`. There is no option to bind another interface.
 - **No telemetry.** The project does not phone home. Network calls happen only when a tool runs, and only to YouTube Music and Google (catalog search, library reads and writes, and OAuth token refresh via `ytmusicapi`).
-- **Auth stays on disk.** Set `PLAYLISTER_AUTH_PATH` to a `ytmusicapi` browser-headers file or OAuth file. On startup the file is forced to mode `600` when the process can do that. Its contents are never logged, never returned to the MCP client, and stripped from error text if a library exception echoes them.
+- **Auth stays on disk.** Set `PLAYLISTER_AUTH_PATH` to a `ytmusicapi` browser-headers file or OAuth file. When the server process starts, it sets that file to mode `600` if it can. `playlister --list-tools` does not open the file. Set `chmod 600` yourself before starting if you want the restriction even when the process cannot change it. The contents are never logged, never returned to the MCP client, and stripped from error text if a library exception echoes them.
 - **Preview, then commit.** `create_playlist` and `add_playlist_tracks` do not write unless `commit` is true. New playlists default to `PRIVATE`.
 - **Dedupe before add.** YouTube Music rejects an entire add when any id is already on the playlist. playlister reads the playlist and sends only the missing ids.
 
@@ -190,7 +190,7 @@ The endpoint is `http://127.0.0.1:8765/mcp`. It is not reachable from another ma
 | `list_playlists` | no | Playlists in your library. Needs auth. |
 | `get_playlist` | no | One playlist and its tracks. `limit` 0 reads all of them. |
 | `create_playlist` | only if `commit` is true | Title, description, privacy (`PRIVATE` by default, or `UNLISTED` / `PUBLIC`). Without `commit`, returns what it would create. |
-| `add_playlist_tracks` | only if `commit` is true | Adds video ids. `dedupe` (default true) skips ids already on the playlist and repeats inside the request. Without `commit`, returns `would_add` and `skipped_duplicates`. |
+| `add_playlist_tracks` | only if `commit` is true | Adds video ids, always skipping ones already on the playlist or repeated in the request. Without `commit`, returns `would_add` and `skipped_duplicates`. A partial failure reports `added` and `not_added`. |
 
 A normal chat looks like this:
 

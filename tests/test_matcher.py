@@ -134,6 +134,46 @@ def test_no_artist_is_never_an_automatic_match():
     assert result["tracks"][0]["status"] == "needs_review"
 
 
+def test_conflicting_recording_is_not_auto_matched():
+    def search(query, filter, limit):
+        if filter != "songs":
+            return []
+        return [_song("studio", "Wonderwall", "Oasis", 259)]
+
+    result = match_tracklist("Oasis — Wonderwall (Live)", search)
+    row = result["tracks"][0]
+    assert row["status"] == "needs_review"
+    assert any("live" in query for query in row["queries"])
+
+
+def test_duplicate_release_does_not_hide_a_close_alternative():
+    def search(query, filter, limit):
+        if filter != "songs":
+            return []
+        return [
+            _song("a", "Wonderwall", "Oasis", 259),
+            _song("b", "Wonderwall", "Oasis", 260),
+            _song("c", "Wonderwall (Radio Edit)", "Oasis", 220),
+        ]
+
+    result = match_tracklist("Oasis — Wonderwall", search)
+    row = result["tracks"][0]
+    assert row["status"] == "needs_review"
+    assert any(item["video_id"] == "c" for item in row["alternatives"])
+
+
+def test_video_fallback_uses_the_latin_query():
+    def search(query, filter, limit):
+        if filter == "videos" and "gruppa" in query.casefold():
+            return [_song("latin-video", "Gruppa Krovi", "Kino", 283, "video")]
+        return []
+
+    result = match_tracklist("Кино — Группа крови", search)
+    row = result["tracks"][0]
+    assert row["chosen"]["video_id"] == "latin-video"
+    assert any(query.startswith("videos:") and "gruppa" in query for query in row["queries"])
+
+
 def test_video_fallback_when_songs_are_weak():
     def search(query, filter, limit):
         if filter == "videos" and "rare" in query.casefold():

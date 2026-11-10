@@ -144,6 +144,27 @@ def test_library_listing_and_playlist_items_drop_private_fields():
     assert "thumbnails" not in playlist["tracks"][0]
 
 
+def test_partial_add_reports_completed_chunks():
+    fake = FakeYT()
+    calls = {"n": 0}
+
+    def add(playlistId, videoIds=None, source_playlist=None, duplicates=False):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return {"status": "STATUS_FAILED"}
+        fake.added.append((playlistId, list(videoIds or []), duplicates))
+        return {"status": "STATUS_SUCCEEDED", "playlistEditResults": []}
+
+    fake.add_playlist_items = add  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake, authenticated=True)
+    ids = [f"v{index}" for index in range(51)]
+    result = yt.add_tracks("PLexisting", ids, commit=True)
+    assert result["ok"] is False
+    assert result["added"] == ids[:50]
+    assert result["not_added"] == [ids[50]]
+    assert fake.added == [("PLexisting", ids[:50], False)]
+
+
 def test_failed_add_is_not_reported_as_success():
     fake = FakeYT()
     fake.add_playlist_items = lambda *args, **kwargs: {"status": "STATUS_FAILED"}  # type: ignore[method-assign]

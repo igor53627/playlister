@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 from dataclasses import dataclass, field
@@ -30,6 +31,22 @@ def auth_path_from_env() -> Path | None:
     if default.is_file():
         return default
     return None
+
+
+def prepare_auth_file() -> None:
+    """Set mode 600 on the auth file when the server starts.
+
+    Missing files are left alone so search still works without auth. The file
+    body is not read. A failure is logged and does not stop the server; the
+    next authenticated tool call reports it.
+    """
+    path = auth_path_from_env()
+    if path is None or not path.is_file():
+        return
+    try:
+        _tighten(path)
+    except AuthError as exc:
+        logging.getLogger("playlister").warning("%s", exc)
 
 
 def _tighten(path: Path) -> None:

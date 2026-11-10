@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio",
 ]
 dependencies = [
-    "mcp>=1.8",
+    "mcp>=2.3,<3",
     "ytmusicapi>=1.11.0",
 ]
 

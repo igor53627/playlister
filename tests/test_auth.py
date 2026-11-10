@@ -86,6 +86,17 @@ def test_missing_file_and_anonymous_default(tmp_path, monkeypatch):
     assert resolve_auth().kind == "anonymous"
 
 
+def test_prepare_auth_file_tightens_without_reading_secrets(tmp_path, monkeypatch):
+    from playlister.auth import prepare_auth_file
+
+    auth = tmp_path / "auth.json"
+    auth.write_text('{"Authorization": "Bearer ya29.SECRET"}', encoding="utf-8")
+    auth.chmod(0o644)
+    monkeypatch.setenv("PLAYLISTER_AUTH_PATH", str(auth))
+    prepare_auth_file()
+    assert stat.S_IMODE(auth.stat().st_mode) == 0o600
+
+
 def test_redact_strips_tokens_from_errors():
     text = redact("Authorization: Bearer ya29.SECRET stuff Cookie=SAPISID=abc")
     assert "ya29.SECRET" not in text

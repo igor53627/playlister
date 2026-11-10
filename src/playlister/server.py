@@ -30,7 +30,7 @@ Use this order:
 4. create_playlist. The default call previews only. Privacy defaults to
    PRIVATE. Pass commit=true only after the user agrees to create it.
 5. add_playlist_tracks with the confirmed video ids. The default call previews
-   the dedupe. Pass commit=true only after the user agrees. Do not add
+   which ids are new. Pass commit=true only after the user agrees. Do not add
    needs_review rows unless the user explicitly accepted that video id.
 
 Only video ids from matched rows (plus ids the user picked) belong in the
@@ -140,7 +140,6 @@ def create_playlist(
 def add_playlist_tracks(
     playlist_id: str,
     video_ids: list[str],
-    dedupe: bool = True,
     commit: bool = False,
 ) -> dict[str, Any]:
     """Add tracks to a playlist, skipping ids already on it.
@@ -148,11 +147,13 @@ def add_playlist_tracks(
     Preview unless commit is true. would_add is what a commit would send;
     skipped_duplicates were already on the playlist or repeated in video_ids.
     Pass only ids the user confirmed (matched rows, or a needs_review
-    alternative they picked). dedupe true (default) reads the playlist first
-    so YouTube Music does not reject the whole batch.
+    alternative they picked). Duplicates are always removed first: YouTube
+    Music rejects the whole batch if any id is already present. If a later
+    chunk fails, added lists the ids that were written and not_added lists
+    the rest.
     """
     try:
-        return get_youtube().add_tracks(playlist_id, video_ids, dedupe=dedupe, commit=commit)
+        return get_youtube().add_tracks(playlist_id, video_ids, commit=commit)
     except Exception as exc:
         return _fail(exc)
 
@@ -200,9 +201,15 @@ def build_server():
 
 
 def run_stdio() -> None:
+    from playlister.auth import prepare_auth_file
+
+    prepare_auth_file()
     build_server().run(transport="stdio")
 
 
 def run_http(port: int) -> None:
+    from playlister.auth import prepare_auth_file
+
     # Localhost only. There is no flag to bind another interface.
+    prepare_auth_file()
     build_server().run(transport="streamable-http", host="127.0.0.1", port=port)

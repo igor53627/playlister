@@ -548,7 +548,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=1.8" },
+    { name = "mcp", specifier = ">=2.3,<3" },
     { name = "ytmusicapi", specifier = ">=1.11.0" },
 ]
 

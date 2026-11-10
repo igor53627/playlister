@@ -112,12 +112,8 @@ def _skip(line: str) -> bool:
 
 
 def _split_artist_title(line: str, order: str) -> tuple[str | None, str]:
-    by_parts = _BY_SPLIT.split(line)
-    if len(by_parts) >= 2 and all(part.strip() for part in by_parts):
-        title = " by ".join(part.strip() for part in by_parts[:-1])
-        artist = by_parts[-1].strip()
-        return artist, title
-
+    # An explicit separator wins over the word "by", so "Ben E. King — Stand by Me"
+    # stays artist / title. "Title by Artist" is only the fallback.
     pieces = [piece.strip() for piece in _DASH_SPLIT.split(line) if piece.strip()]
     if len(pieces) >= 2:
         left, right = pieces[0], " - ".join(pieces[1:])
@@ -125,18 +121,17 @@ def _split_artist_title(line: str, order: str) -> tuple[str | None, str]:
             return right, left
         return left, right
 
+    by_parts = _BY_SPLIT.split(line)
+    if len(by_parts) >= 2 and all(part.strip() for part in by_parts):
+        title = " by ".join(part.strip() for part in by_parts[:-1])
+        artist = by_parts[-1].strip()
+        return artist, title
+
     if ":" in line and "://" not in line:
         left, right = (part.strip() for part in line.split(":", 1))
         if left and right:
             if order == "title-artist":
                 return right, left
-            return left, right
-
-    if line.count(",") == 1 and order == "artist-title":
-        left, right = (part.strip() for part in line.split(",", 1))
-        if left and right and " " not in left:
-            # "Artist, Title" exports. "Tyler, The Creator" has a space and
-            # is left as a bare title rather than split into nonsense.
             return left, right
 
     return None, line

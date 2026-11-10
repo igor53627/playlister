@@ -32,6 +32,27 @@ def test_live_radio_and_remix_are_signals():
     assert signals.remix == "Kygo"
 
 
+def test_version_words_inside_a_name_stay_in_the_name():
+    core, signals = extract_signals("Piano Man")
+    assert core == "Piano Man"
+    assert signals.version is None
+    artist, artist_signals = extract_signals("The Piano Guys")
+    assert artist == "The Piano Guys"
+    assert artist_signals.version is None
+    cover, cover_signals = extract_signals("Cover Me")
+    assert cover == "Cover Me"
+    assert cover_signals.version is None
+
+
+def test_trailing_version_suffix_is_still_a_signal():
+    core, signals = extract_signals("Wonderwall Acoustic")
+    assert core == "Wonderwall"
+    assert signals.version == "acoustic"
+    dashed, dashed_signals = extract_signals("Song - Piano Version")
+    assert dashed == "Song"
+    assert dashed_signals.version == "piano"
+
+
 def test_version_tags_stay_available_as_signals():
     core, signals = extract_signals("Song (Acoustic Version)")
     assert core == "Song"

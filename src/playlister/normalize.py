@@ -220,10 +220,26 @@ def extract_signals(title: str) -> tuple[str, TrackSignals]:
         _apply_group(trailing.group(0), signals)
         core = core[: trailing.start()]
 
-    version = _version_name(core)
-    if version in _STRONG_VERSIONS:
-        signals.version = signals.version or version
-        core = re.sub(rf"(?i)\b{re.escape(version)}\b", " ", core)
+    # Only a suffix ("Wonderwall Acoustic", "Song - Acoustic Version").
+    # Words inside the title stay put: "Piano Man", "The Piano Guys", "Cover Me".
+    phrases = sorted(
+        (phrase for phrase, name in _VERSIONS if name in _STRONG_VERSIONS),
+        key=len,
+        reverse=True,
+    )
+    version_tail = re.search(
+        rf"(?i)\s+(?:[-–—|]\s+)?({'|'.join(re.escape(phrase) for phrase in phrases)})"
+        rf"(?:\s+version)?\s*$",
+        core,
+    )
+    if version_tail and version_tail.start() > 0:
+        version = _version_name(version_tail.group(1))
+        window = core[version_tail.start() :]
+        ordinary_word = version in {"piano", "cover", "tribute"}
+        marked = bool(re.search(r"[-–—|]", window)) or "version" in window.casefold()
+        if version and not (ordinary_word and not marked):
+            signals.version = signals.version or version
+            core = core[: version_tail.start()]
 
     core = squash(core.strip(" -–—|"))
     if not core:
