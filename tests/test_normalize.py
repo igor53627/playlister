@@ -53,6 +53,25 @@ def test_trailing_version_suffix_is_still_a_signal():
     assert dashed_signals.version == "piano"
 
 
+def test_different_version_labels_stay_different():
+    english, english_signals = extract_signals("Song (original English language version)")
+    russian, russian_signals = extract_signals("Song (новая русская версия)")
+    assert english == "Song"
+    assert russian == "Song"
+    assert english_signals.version == "original english language"
+    assert russian_signals.version == "новая русская"
+    assert english_signals.version != russian_signals.version
+
+    album, album_signals = extract_signals("Song (Album Version)")
+    assert album == "Song"
+    assert album_signals.version == "album"
+
+    radio, radio_signals = extract_signals("Song (Radio Version)")
+    assert radio == "Song"
+    assert radio_signals.radio_edit is True
+    assert radio_signals.version is None
+
+
 def test_version_tags_stay_available_as_signals():
     core, signals = extract_signals("Song (Acoustic Version)")
     assert core == "Song"

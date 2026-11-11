@@ -3,7 +3,7 @@ import os
 import sys
 
 from playlister.server import TOOL_NAMES, search_tracks
-from playlister.youtube import YouTubeMusic, set_client_factory
+from playlister.youtube import YouTubeMusic, clear_fresh_playlists, set_client_factory
 
 
 class _Silent:
@@ -17,6 +17,57 @@ class _Silent:
                 "duration_seconds": 259,
             }
         ][:limit]
+
+
+def test_create_then_add_uses_a_fresh_id_across_clients():
+    """create_playlist and add_playlist_tracks each build their own client."""
+    from playlister.server import add_playlist_tracks, create_playlist
+
+    class _SeparateCalls:
+        def __init__(self) -> None:
+            self.added: list[tuple[str, list[str]]] = []
+
+        def create_playlist(
+            self,
+            title,
+            description,
+            privacy_status="PRIVATE",
+            video_ids=None,
+            source_playlist=None,
+        ):
+            return "PLfresh"
+
+        def get_playlist(self, *args, **kwargs):
+            raise KeyError(
+                "Unable to find 'contents' using path "
+                "['contents', 'twoColumnBrowseResultsRenderer', 'tabs', 0]"
+            )
+
+        def add_playlist_items(
+            self, playlistId, videoIds=None, source_playlist=None, duplicates=False
+        ):
+            self.added.append((playlistId, list(videoIds or [])))
+            return {"status": "STATUS_SUCCEEDED", "playlistEditResults": []}
+
+    fake = _SeparateCalls()
+
+    def client() -> YouTubeMusic:
+        yt = YouTubeMusic(fake, authenticated=True)
+        yt._sleep = lambda _delay: None
+        return yt
+
+    clear_fresh_playlists()
+    set_client_factory(client)
+    try:
+        created = create_playlist("Road", commit=True)
+        written = add_playlist_tracks(created["playlist_id"], ["new1", "new2"], commit=True)
+    finally:
+        set_client_factory(None)
+        clear_fresh_playlists()
+    assert created["ok"] is True
+    assert written["ok"] is True
+    assert written["added"] == ["new1", "new2"]
+    assert fake.added == [("PLfresh", ["new1", "new2"])]
 
 
 def test_tools_use_the_injected_client_and_do_not_write(monkeypatch):

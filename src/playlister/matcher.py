@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from playlister.normalize import TrackSignals, extract_signals
+from playlister.normalize import TrackSignals, extract_signals, versions_equal
 from playlister.parser import ParsedTrack, parse_tracklist
 from playlister.scoring import (
     ScoredCandidate,
@@ -52,6 +52,7 @@ def queries_for(track: ParsedTrack) -> list[str]:
     queries: list[str] = []
 
     def add(query: str) -> None:
+        """Append a query unless the same text is already queued."""
         cleaned = " ".join(query.split())
         if cleaned and cleaned.casefold() not in {item.casefold() for item in queries}:
             queries.append(cleaned)
@@ -78,6 +79,7 @@ def queries_for(track: ParsedTrack) -> list[str]:
 
 
 def _requested_tag(signals: TrackSignals) -> str | None:
+    """Remix, version, live, or radio-edit words to include in the catalog query."""
     if signals.remix:
         return "remix" if signals.remix == "remix" else signals.remix
     if signals.version:
@@ -98,6 +100,8 @@ def blocks_auto_match(query: TrackSignals, title: str) -> bool:
     if query.live != candidate.live or query.radio_edit != candidate.radio_edit:
         return True
     if (query.remix or candidate.remix) and not remix_compatible(query.remix, candidate.remix):
+        return True
+    if query.version and candidate.version and not versions_equal(query.version, candidate.version):
         return True
     query_strong = query.version in _STRONG_VERSIONS
     candidate_strong = candidate.version in _STRONG_VERSIONS
@@ -122,7 +126,23 @@ def _same_remix(left: str | None, right: str | None) -> bool:
     return a == b or a in b or b in a
 
 
+def _durations_compatible(left: int | None, right: int | None) -> bool:
+    """True when two copies look like the same edit.
+
+    Catalog rows for one song often disagree by half a minute. A gap past
+    about 50 seconds is a different edit and stays in the comparison.
+    """
+    if left is None or right is None:
+        return True
+    diff = abs(left - right)
+    if diff <= 12:
+        return True
+    short = min(left, right) or 1
+    return diff <= 50 and diff <= short * 0.4
+
+
 def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
+    """True when two hits are the same edit, including copies with close durations."""
     _, left_signals = extract_signals(left.title)
     _, right_signals = extract_signals(right.title)
     live_differs = left_signals.live != right_signals.live
@@ -131,23 +151,73 @@ def _same_recording(left: ScoredCandidate, right: ScoredCandidate) -> bool:
         return False
     if not _same_remix(left_signals.remix, right_signals.remix):
         return False
-    if (left_signals.version or None) != (right_signals.version or None):
+    left_version = left_signals.version
+    right_version = right_signals.version
+    if bool(left_version) != bool(right_version):
+        return False
+    if left_version and right_version and not versions_equal(left_version, right_version):
         return False
     if name_similarity(left.title, right.title) < 0.92:
         return False
     if artist_similarity(left.artists, list(right.artists)) < 0.8:
         return False
-    if left.duration_seconds is None or right.duration_seconds is None:
+    return _durations_compatible(left.duration_seconds, right.duration_seconds)
+
+
+def _comparable_song(item: ScoredCandidate, signals: TrackSignals | None) -> bool:
+    """A studio row of the same title and artist, not a different recording."""
+    if item.result_type != "song" or item.score < REVIEW_THRESHOLD:
+        return False
+    if item.title_similarity < 0.88 or item.artist_similarity < 0.8:
+        return False
+    return signals is None or not blocks_auto_match(signals, item.title)
+
+
+def _song_can_replace_video(
+    song: ScoredCandidate,
+    signals: TrackSignals | None,
+    wanted_duration: int | None,
+) -> bool:
+    """False when the song is another edit, or its duration misses the request."""
+    if signals is not None and blocks_auto_match(signals, song.title):
+        return False
+    _, got = extract_signals(song.title)
+    asked = None if signals is None else signals.version
+    if got.version and not versions_equal(asked, got.version):
+        return False
+    if wanted_duration is None or song.duration_seconds is None:
         return True
-    return abs(left.duration_seconds - right.duration_seconds) <= 8
+    return abs(song.duration_seconds - wanted_duration) <= 30
 
 
-def _prefer_song(ranked: list[ScoredCandidate]) -> ScoredCandidate:
+def _prefer_song(
+    ranked: list[ScoredCandidate],
+    signals: TrackSignals | None = None,
+    wanted_duration: int | None = None,
+) -> ScoredCandidate:
+    """Prefer a studio song over a video of the same recording.
+
+    A song that is a different edit, or far from the requested duration, does
+    not take the place of a video that already fits.
+    """
     best = ranked[0]
-    floor = best.score - SONG_PREFERENCE
-    songs = [item for item in ranked if item.result_type == "song" and item.score >= floor]
-    if best.result_type == "video" and songs:
+    if best.result_type != "video":
+        return best
+
+    def usable(item: ScoredCandidate) -> bool:
+        return _song_can_replace_video(item, signals, wanted_duration)
+
+    songs = [item for item in ranked if _comparable_song(item, signals) and usable(item)]
+    if songs:
         return songs[0]
+    floor = best.score - SONG_PREFERENCE
+    close = [
+        item
+        for item in ranked
+        if item.result_type == "song" and item.score >= floor and usable(item)
+    ]
+    if close:
+        return close[0]
     return best
 
 
@@ -156,10 +226,12 @@ def classify(
     *,
     had_artist: bool,
     signals: TrackSignals | None = None,
+    duration_seconds: int | None = None,
 ) -> tuple[str, ScoredCandidate | None]:
+    """Bucket a ranked list as matched, needs_review, or not_found."""
     if not ranked:
         return "not_found", None
-    chosen = _prefer_song(ranked)
+    chosen = _prefer_song(ranked, signals, duration_seconds)
     others = [item for item in ranked if item.video_id != chosen.video_id]
     runner = next((item for item in others if not _same_recording(chosen, item)), None)
     margin = chosen.score - (runner.score if runner else 0.0)
@@ -192,6 +264,7 @@ def classify(
 def _absorb(
     found: dict[str, ScoredCandidate], track: ParsedTrack, hits: list[dict[str, Any]]
 ) -> None:
+    """Score hits and keep the higher score when the same video id appears twice."""
     for hit in hits:
         scored = score_hit(track, hit)
         if scored is None:
@@ -225,6 +298,7 @@ def _video_queries(queries: list[str]) -> list[str]:
 
 
 def match_track(track: ParsedTrack, search: SearchFn, *, search_limit: int = 8) -> dict[str, Any]:
+    """Search songs, then videos if needed, and classify one parsed line."""
     found: dict[str, ScoredCandidate] = {}
     tried: list[str] = []
     queries = queries_for(track)
@@ -253,8 +327,19 @@ def match_track(track: ParsedTrack, search: SearchFn, *, search_limit: int = 8) 
             tried.append(f"videos:{video_query}")
             _absorb(found, track, search(video_query, "videos", min(search_limit, 6)))
 
-    ranked = sorted(found.values(), key=lambda item: item.score, reverse=True)
-    status, chosen = classify(ranked, had_artist=bool(track.artists), signals=track.signals)
+    # Equal scores are one recording's copies: song, then a row that names an
+    # album, then whichever hit was returned first.
+    ranked = sorted(
+        found.values(),
+        key=lambda item: (item.score, item.result_type == "song", bool(item.album)),
+        reverse=True,
+    )
+    status, chosen = classify(
+        ranked,
+        had_artist=bool(track.artists),
+        signals=track.signals,
+        duration_seconds=track.duration_seconds,
+    )
     alternatives = [
         item.as_dict() for item in ranked if chosen is None or item.video_id != chosen.video_id
     ][:3]
@@ -277,6 +362,7 @@ def match_tracklist(
     order: str = "artist-title",
     search_limit: int = 8,
 ) -> dict[str, Any]:
+    """Match every parsed line and count matched, needs_review, and not_found."""
     tracks = parse_tracklist(text, order=order)
     rows = [match_track(track, search, search_limit=search_limit) for track in tracks]
     summary = {

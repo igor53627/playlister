@@ -1,5 +1,5 @@
 from playlister.parser import parse_tracklist
-from playlister.scoring import score_hit
+from playlister.scoring import name_similarity, score_hit
 
 
 def _track(line: str):
@@ -94,6 +94,53 @@ def test_cyrillic_query_scores_a_latin_catalog_entry():
     )
     assert kazakh_hit is not None
     assert kazakh_hit.score >= 0.9
+
+
+def test_title_prefix_of_a_longer_word_is_not_a_strong_match():
+    assert name_similarity("Айда", "Айдахар") < 0.7
+    assert name_similarity("Love of Tired Swans", "The Love of Tired Swans") >= 0.9
+    track = _track("Ирина Кайратовна — Айда")
+    hit = score_hit(
+        track,
+        _hit(title="Айдахар", artists=[{"name": "Ирина Кайратовна"}]),
+    )
+    assert hit is not None
+    assert hit.score < 0.84
+
+
+def test_fan_club_video_is_penalized_unless_the_request_asks_for_it():
+    track = _track("Dimash Kudaibergen — Daididau")
+    fan = score_hit(
+        track,
+        _hit(
+            videoId="fan",
+            resultType="video",
+            title="Daididau",
+            artists=[{"name": "Dimash Perú Dears Fan Club Oficial"}],
+            album=None,
+        ),
+    )
+    studio = score_hit(
+        track,
+        _hit(videoId="studio", title="Daididau", artists=[{"name": "Dimash Qudaibergen"}]),
+    )
+    assert fan is not None and studio is not None
+    assert "unofficial video" in fan.reasons
+    assert fan.score < studio.score
+    assert fan.score < 0.84
+    asked = _track("Dimash Kudaibergen — Daididau fan cam")
+    allowed = score_hit(
+        asked,
+        _hit(
+            videoId="cam",
+            resultType="video",
+            title="Daididau fancam",
+            artists=[{"name": "Dimash Qudaibergen"}],
+            album=None,
+        ),
+    )
+    assert allowed is not None
+    assert "unofficial video" not in allowed.reasons
 
 
 def test_video_is_penalized_against_an_equal_song():
