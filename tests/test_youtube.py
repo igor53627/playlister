@@ -775,3 +775,118 @@ def test_from_env_builds_hybrid_client_for_oauth(tmp_path, monkeypatch):
     assert client.authenticated is True
     assert client._data_api is not None
     assert yt_init_calls == [((), {})]
+
+
+def test_from_env_browser_mode_uses_unauthenticated_client_for_catalog_and_radio(
+    tmp_path, monkeypatch
+):
+    import json
+
+    import ytmusicapi
+
+    auth = tmp_path / "browser.json"
+    auth.write_text(json.dumps({"Cookie": "SAPISID=abc", "Authorization": "x"}), encoding="utf-8")
+    auth.chmod(0o600)
+    monkeypatch.setenv("PLAYLISTER_AUTH_PATH", str(auth))
+
+    instances: list[tuple[tuple, dict]] = []
+
+    class _StubYT:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            instances.append((args, kwargs))
+
+    monkeypatch.setattr(ytmusicapi, "YTMusic", _StubYT)
+
+    client = YouTubeMusic.from_env()
+    assert client.authenticated is True
+    assert client._data_api is None
+    assert client._client is not client._public_client
+    assert client._client.args == (str(auth),)
+    assert client._public_client.args == ()
+
+
+def test_oauth_ambiguous_insert_error_reconciles_via_playlist_read():
+    from playlister.data_api import DataAPIError
+
+    fake_yt = FakeYT()
+    data_api = FakeDataAPI()
+    orig_insert = data_api.insert_playlist_item
+
+    def apply_then_504(playlist_id: str, video_id: str):
+        orig_insert(playlist_id, video_id)
+        raise DataAPIError("HTTP 504", status_code=504, ambiguous=True)
+
+    data_api.insert_playlist_item = apply_then_504  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake_yt, authenticated=True, data_api=data_api)
+    result = yt.add_tracks("PLoauth", ["v1", "v2"], commit=True)
+    assert result["ok"] is False
+    assert result["added"] == ["v1"]
+    assert result["not_added"] == ["v2"]
+    assert "uncertain" not in result
+
+
+def test_lost_remove_reply_reconciles_and_marks_uncertain_when_reread_fails():
+    fake_yt = FakeYT()
+    data_api = FakeDataAPI()
+    orig_delete = data_api.delete_playlist_item
+
+    def delete_then_timeout(playlist_item_id: str) -> None:
+        orig_delete(playlist_item_id)
+        raise TimeoutError("reply lost")
+
+    data_api.delete_playlist_item = delete_then_timeout  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake_yt, authenticated=True, data_api=data_api)
+    reconciled = yt.remove_tracks("PLoauth", ["keep", "drop"], commit=True)
+    assert reconciled["ok"] is False
+    assert reconciled["removed"] == ["keep"]
+    assert reconciled["not_removed"] == ["drop"]
+    assert "uncertain" not in reconciled
+
+    # Now fail the re-read too so the in-flight item becomes uncertain
+    data_api2 = FakeDataAPI()
+    reads = {"n": 0}
+    orig_get = data_api2.get_playlist
+
+    def flaky_get(playlist_id: str, limit: int = 100):
+        reads["n"] += 1
+        if reads["n"] > 1:
+            raise TimeoutError("reread failed")
+        return orig_get(playlist_id, limit=limit)
+
+    def timeout_delete(playlist_item_id: str) -> None:
+        raise TimeoutError("reply lost")
+
+    data_api2.get_playlist = flaky_get  # type: ignore[method-assign]
+    data_api2.delete_playlist_item = timeout_delete  # type: ignore[method-assign]
+    yt2 = YouTubeMusic(fake_yt, authenticated=True, data_api=data_api2)
+    uncertain = yt2.remove_tracks("PLoauth", ["keep", "drop"], commit=True)
+    assert uncertain["ok"] is False
+    assert uncertain["removed"] == []
+    assert uncertain["uncertain"] == ["keep"]
+    assert uncertain["not_removed"] == ["drop"]
+
+
+def test_browser_lost_remove_reply_marks_uncertain_when_reread_fails():
+    fake = FakeYT()
+    fake.playlists["PLexisting"]["tracks"][0]["setVideoId"] = "SET_keep"
+    reads = {"n": 0}
+    orig_get = fake.get_playlist
+
+    def flaky_get(*args, **kwargs):
+        reads["n"] += 1
+        if reads["n"] > 1:
+            raise TimeoutError("reread failed")
+        return orig_get(*args, **kwargs)
+
+    def boom_remove(*args, **kwargs):
+        raise TimeoutError("reply lost")
+
+    fake.get_playlist = flaky_get  # type: ignore[method-assign]
+    fake.remove_playlist_items = boom_remove  # type: ignore[attr-defined]
+    yt = YouTubeMusic(fake, authenticated=True)
+    result = yt.remove_tracks("PLexisting", ["keep"], commit=True)
+    assert result["ok"] is False
+    assert result["removed"] == []
+    assert result["uncertain"] == ["keep"]
+    assert result["not_removed"] == []

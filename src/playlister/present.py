@@ -108,6 +108,53 @@ def lost_add_response(
     }
 
 
+def lost_remove_response(
+    refreshed: dict[str, Any],
+    *,
+    playlist_id: str,
+    removed: list[str],
+    in_flight: list[dict[str, str]],
+    to_remove: list[dict[str, str]],
+    not_found: list[str],
+    error: str,
+) -> dict[str, Any]:
+    """A remove request whose outcome is uncertain (timeout, 5xx, etc.).
+
+    When the playlist can be re-read, items whose ``playlist_item_id`` is no
+    longer present count as removed. Otherwise the in-flight items are reported
+    as ``uncertain`` and unattempted items stay in ``not_removed``.
+    """
+    if refreshed.get("ok"):
+        present_ids = {
+            str(track["playlist_item_id"])
+            for track in refreshed["tracks"]
+            if track.get("playlist_item_id")
+        }
+        return {
+            "ok": False,
+            "error": error,
+            "playlist_id": playlist_id,
+            "removed": [
+                item["video_id"]
+                for item in to_remove
+                if item["playlist_item_id"] not in present_ids
+            ],
+            "not_removed": [
+                item["video_id"] for item in to_remove if item["playlist_item_id"] in present_ids
+            ],
+            "not_found": not_found,
+        }
+    return {
+        "ok": False,
+        "error": error,
+        "playlist_id": playlist_id,
+        "removed": removed,
+        "uncertain": [item["video_id"] for item in in_flight],
+        "not_removed": [item["video_id"] for item in to_remove[len(removed) + len(in_flight) :]],
+        "not_found": not_found,
+    }
+
+
 def public_track(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict) or not item.get("videoId"):
         return None

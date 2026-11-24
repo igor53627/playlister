@@ -24,9 +24,9 @@ DATA_API_BASE = "https://www.googleapis.com/youtube/v3"
 _MAX_PAGE_SIZE = 50
 _RATING_CHUNK = 50
 _DEFAULT_TIMEOUT = 30.0
-_TRANSIENT_STATUSES = {409, 500, 502, 503, 504}
+_CONFLICT_STATUS = 409
 _WRITE_BACKOFF_SECONDS = (0.5, 1.0, 2.0)
-_QUOTA_REASONS = {"quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded"}
+_QUOTA_REASONS = {"quotaExceeded", "dailyLimitExceeded"}
 _HTML_TAG = re.compile(r"<[^>]+>")
 
 
@@ -39,10 +39,12 @@ class DataAPIError(Exception):
         *,
         status_code: int | None = None,
         reason: str | None = None,
+        ambiguous: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.reason = reason
+        self.ambiguous = ambiguous
 
 
 class QuotaExceededError(DataAPIError):
@@ -89,7 +91,12 @@ def _parse_api_error(response: requests.Response) -> DataAPIError:
     label = f"HTTP {status}" + (f" ({reason})" if reason else "")
     prefix = f"YouTube Data API error {label}"
     message = f"{prefix}: {cleaned}" if cleaned else prefix
-    return DataAPIError(message, status_code=status, reason=reason)
+    return DataAPIError(
+        message,
+        status_code=status,
+        reason=reason,
+        ambiguous=status >= 500,
+    )
 
 
 class YouTubeDataAPI:
@@ -158,7 +165,9 @@ class YouTubeDataAPI:
                 parsed = response.json()
             except ValueError:
                 raise DataAPIError(
-                    "YouTube Data API returned invalid JSON", status_code=response.status_code
+                    "YouTube Data API returned invalid JSON",
+                    status_code=response.status_code,
+                    ambiguous=True,
                 ) from None
             return parsed if isinstance(parsed, dict) else {}
 
@@ -326,7 +335,7 @@ class YouTubeDataAPI:
         return playlist_id
 
     def insert_playlist_item(self, playlist_id: str, video_id: str) -> dict[str, Any]:
-        """Insert one video into a playlist, retrying transient 409/5xx responses."""
+        """Insert one video, retrying only HTTP 409 conflict where the write was aborted."""
         body = {
             "snippet": {
                 "playlistId": playlist_id,
@@ -345,14 +354,14 @@ class YouTubeDataAPI:
             except QuotaExceededError:
                 raise
             except DataAPIError as exc:
-                if exc.status_code not in _TRANSIENT_STATUSES or attempt == len(delays):
+                if exc.status_code != _CONFLICT_STATUS or attempt == len(delays):
                     raise
-                logger.info("playlistItems.insert got HTTP %s; retrying", exc.status_code)
+                logger.info("playlistItems.insert got HTTP 409; retrying")
                 self._sleep(delays[attempt])
         raise DataAPIError("playlistItems.insert failed")  # pragma: no cover
 
     def delete_playlist_item(self, playlist_item_id: str) -> None:
-        """Delete one playlist item by ``playlistItemId``."""
+        """Delete one playlist item by ``playlistItemId``, retrying HTTP 409 conflicts."""
         delays = _WRITE_BACKOFF_SECONDS
         for attempt in range(len(delays) + 1):
             try:
@@ -361,9 +370,9 @@ class YouTubeDataAPI:
             except QuotaExceededError:
                 raise
             except DataAPIError as exc:
-                if exc.status_code not in _TRANSIENT_STATUSES or attempt == len(delays):
+                if exc.status_code != _CONFLICT_STATUS or attempt == len(delays):
                     raise
-                logger.info("playlistItems.delete got HTTP %s; retrying", exc.status_code)
+                logger.info("playlistItems.delete got HTTP 409; retrying")
                 self._sleep(delays[attempt])
 
     def get_video_ratings(self, video_ids: list[str]) -> list[dict[str, str]]:

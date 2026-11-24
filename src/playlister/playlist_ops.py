@@ -10,6 +10,7 @@ from playlister.auth import AuthError
 from playlister.data_api import DataAPIError
 from playlister.present import (
     lost_add_response,
+    lost_remove_response,
     partial_add,
     partial_remove,
     write_succeeded,
@@ -27,6 +28,12 @@ def format_error(exc: Exception) -> str:
     return public_error(exc)
 
 
+def _is_definitive_api_error(exc: Exception) -> bool:
+    if isinstance(exc, AuthError):
+        return True
+    return isinstance(exc, DataAPIError) and not exc.ambiguous
+
+
 def commit_add_data_api(
     data_api: Any,
     reread: Callable[[], dict[str, Any]],
@@ -40,11 +47,11 @@ def commit_add_data_api(
     for video_id in would_add:
         try:
             data_api.insert_playlist_item(playlist_id, video_id)
-        except (AuthError, DataAPIError) as exc:
-            logger.info("playlistItems.insert failed: %s", type(exc).__name__)
-            return partial_add(playlist_id, added, would_add, skipped, error=str(exc))
         except Exception as exc:
-            logger.info("playlistItems.insert transport failure")
+            if _is_definitive_api_error(exc):
+                logger.info("playlistItems.insert failed: %s", type(exc).__name__)
+                return partial_add(playlist_id, added, would_add, skipped, error=str(exc))
+            logger.info("playlistItems.insert uncertain failure")
             return lost_add_response(
                 reread(),
                 playlist_id=playlist_id,
@@ -107,6 +114,7 @@ def commit_add_browser(
 
 def commit_remove_data_api(
     data_api: Any,
+    reread: Callable[[], dict[str, Any]],
     *,
     playlist_id: str,
     to_remove: list[dict[str, str]],
@@ -118,12 +126,23 @@ def commit_remove_data_api(
         try:
             data_api.delete_playlist_item(item["playlist_item_id"])
         except Exception as exc:
-            logger.info("playlistItems.delete failed")
-            return partial_remove(
-                playlist_id,
-                removed,
-                [entry["video_id"] for entry in to_remove[idx:]],
-                not_found,
+            if _is_definitive_api_error(exc):
+                logger.info("playlistItems.delete failed: %s", type(exc).__name__)
+                return partial_remove(
+                    playlist_id,
+                    removed,
+                    [entry["video_id"] for entry in to_remove[idx:]],
+                    not_found,
+                    error=str(exc),
+                )
+            logger.info("playlistItems.delete uncertain failure")
+            return lost_remove_response(
+                reread(),
+                playlist_id=playlist_id,
+                removed=removed,
+                in_flight=[item],
+                to_remove=to_remove,
+                not_found=not_found,
                 error=format_error(exc),
             )
         removed.append(item["video_id"])
@@ -139,6 +158,7 @@ def commit_remove_data_api(
 
 def commit_remove_browser(
     client: Any,
+    reread: Callable[[], dict[str, Any]],
     *,
     playlist_id: str,
     to_remove: list[dict[str, str]],
@@ -152,11 +172,13 @@ def commit_remove_browser(
         result = client.remove_playlist_items(playlist_id, payload)
     except Exception as exc:
         logger.info("remove_playlist_tracks failed")
-        return partial_remove(
-            playlist_id,
-            [],
-            [item["video_id"] for item in to_remove],
-            not_found,
+        return lost_remove_response(
+            reread(),
+            playlist_id=playlist_id,
+            removed=[],
+            in_flight=to_remove,
+            to_remove=to_remove,
+            not_found=not_found,
             error=format_error(exc),
         )
     if not write_succeeded(result):

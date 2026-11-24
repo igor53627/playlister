@@ -245,12 +245,12 @@ def test_create_playlist_sends_lowercase_privacy(tmp_path):
     }
 
 
-def test_insert_playlist_item_retries_transient_409_and_503(tmp_path):
+def test_insert_playlist_item_retries_409_conflict_only(tmp_path):
     api, session, sleeps, _ = _make_api(
         tmp_path,
         [
             _FakeResponse(409, {"error": {"code": 409, "message": "conflict"}}),
-            _FakeResponse(503, {"error": {"code": 503, "message": "backend error"}}),
+            _FakeResponse(409, {"error": {"code": 409, "message": "conflict"}}),
             _FakeResponse(200, {"id": "PLI_new"}),
         ],
     )
@@ -264,6 +264,45 @@ def test_insert_playlist_item_retries_transient_409_and_503(tmp_path):
             "resourceId": {"kind": "youtube#video", "videoId": "vid1"},
         }
     }
+
+
+def test_insert_playlist_item_does_not_blindly_retry_5xx_or_bad_json(tmp_path):
+    api, session, sleeps, _ = _make_api(
+        tmp_path,
+        [_FakeResponse(504, {"error": {"code": 504, "message": "gateway timeout"}})],
+    )
+    with pytest.raises(DataAPIError) as caught:
+        api.insert_playlist_item("PL1", "vid1")
+    assert caught.value.ambiguous is True
+    assert caught.value.status_code == 504
+    assert sleeps == []
+    assert len(session.calls) == 1
+
+    bad_json_resp = _FakeResponse(200, None)
+    bad_json_resp.content = b"not-json"
+    api2, session2, sleeps2, _ = _make_api(tmp_path, [bad_json_resp])
+    with pytest.raises(DataAPIError) as caught2:
+        api2.insert_playlist_item("PL1", "vid1")
+    assert caught2.value.ambiguous is True
+    assert sleeps2 == []
+    assert len(session2.calls) == 1
+
+
+def test_rate_limit_exceeded_is_not_reported_as_daily_quota(tmp_path):
+    rate_payload = {
+        "error": {
+            "code": 403,
+            "message": "Rate Limit Exceeded",
+            "errors": [{"reason": "rateLimitExceeded", "message": "Rate Limit Exceeded"}],
+        }
+    }
+    api, _, _, _ = _make_api(tmp_path, [_FakeResponse(403, rate_payload)])
+    with pytest.raises(DataAPIError) as caught:
+        api.list_playlists()
+    assert not isinstance(caught.value, QuotaExceededError)
+    assert caught.value.reason == "rateLimitExceeded"
+    assert "10,000" not in str(caught.value)
+    assert "rateLimitExceeded" in str(caught.value)
 
 
 def test_delete_playlist_item_and_rate_video_accept_204(tmp_path):

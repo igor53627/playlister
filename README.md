@@ -130,7 +130,8 @@ Google's default YouTube Data API v3 quota is **10,000 units per day** (resets a
 | Operation | Quota cost |
 | --- | --- |
 | `parse_tracklist`, `search_tracks`, `match_tracklist`, `get_similar_tracks` | **0** (local or anonymous `ytmusicapi`) |
-| `list_playlists`, `get_playlist` | **1** per page (up to 50 items/page) |
+| `list_playlists` | **1** per page (up to 50 playlists/page) |
+| `get_playlist` | **1** for metadata, plus **1** per track page (up to 50 items/page) |
 | `get_track_ratings` | **1** per batch of up to 50 video ids |
 | `create_playlist` | **50** |
 | `add_playlist_tracks` | **50** per added video (preview costs only the playlist read) |

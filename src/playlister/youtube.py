@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from playlister.auth import AuthError, build_ytmusic, resolve_auth
+from playlister.auth import AuthError, build_public_ytmusic, build_ytmusic, resolve_auth
 from playlister.data_api import DataAPIError, YouTubeDataAPI
 from playlister.matcher import match_tracklist
 from playlister.oauth import OAuthTokenManager
@@ -102,8 +102,10 @@ class YouTubeMusic:
         *,
         authenticated: bool,
         data_api: Any | None = None,
+        public_client: Any | None = None,
     ) -> None:
         self._client = client
+        self._public_client = public_client if public_client is not None else client
         self.authenticated = authenticated
         self._data_api = data_api
         self._sleep = time.sleep
@@ -112,6 +114,7 @@ class YouTubeMusic:
     def from_env(cls) -> YouTubeMusic:
         config = resolve_auth()
         client = build_ytmusic(config)
+        public_client = build_public_ytmusic() if config.kind == "browser" else client
         data_api: YouTubeDataAPI | None = None
         if config.kind == "oauth" and config.path is not None:
             tokens = OAuthTokenManager(
@@ -120,7 +123,12 @@ class YouTubeMusic:
                 client_secret=config.oauth_client_secret or "",
             )
             data_api = YouTubeDataAPI(tokens)
-        return cls(client, authenticated=config.kind != "anonymous", data_api=data_api)
+        return cls(
+            client,
+            authenticated=config.kind != "anonymous",
+            data_api=data_api,
+            public_client=public_client,
+        )
 
     def _require_auth(self) -> dict[str, Any] | None:
         if self.authenticated:
@@ -134,14 +142,14 @@ class YouTubeMusic:
             ),
         }
 
-    # --- Catalog (ytmusicapi; unauthenticated in OAuth & anonymous modes) ---
+    # --- Catalog (always unauthenticated ytmusicapi via _public_client) ---
 
     def search(self, query: str, filter: str = "songs", limit: int = 10) -> list[dict[str, Any]]:
         if filter not in {"songs", "videos"}:
             raise ValueError("filter must be 'songs' or 'videos'")
         limit = max(1, min(int(limit), 20))
         try:
-            raw = self._client.search(query, filter=filter, limit=limit)
+            raw = self._public_client.search(query, filter=filter, limit=limit)
         except Exception as exc:
             logger.warning("search failed: %s", type(exc).__name__)
             raise
@@ -176,7 +184,9 @@ class YouTubeMusic:
             return {"ok": False, "error": "video_id is required"}
         clamped = max(1, min(int(limit), 50))
         try:
-            raw = self._client.get_watch_playlist(videoId=seed, radio=True, limit=clamped + 1)
+            raw = self._public_client.get_watch_playlist(
+                videoId=seed, radio=True, limit=clamped + 1
+            )
         except Exception as exc:
             logger.warning("get_similar_tracks failed: %s", type(exc).__name__)
             return {"ok": False, "error": format_error(exc)}
@@ -438,12 +448,21 @@ class YouTubeMusic:
                 "removed": [],
                 "not_found": not_found,
             }
+        reread = lambda: self.get_playlist(playlist_id, limit=0)  # noqa: E731
         if self._data_api is not None:
             return commit_remove_data_api(
-                self._data_api, playlist_id=playlist_id, to_remove=to_remove, not_found=not_found
+                self._data_api,
+                reread,
+                playlist_id=playlist_id,
+                to_remove=to_remove,
+                not_found=not_found,
             )
         return commit_remove_browser(
-            self._client, playlist_id=playlist_id, to_remove=to_remove, not_found=not_found
+            self._client,
+            reread,
+            playlist_id=playlist_id,
+            to_remove=to_remove,
+            not_found=not_found,
         )
 
     def get_track_ratings(self, video_ids: list[str]) -> dict[str, Any]:

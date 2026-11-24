@@ -252,7 +252,10 @@ def run_device_flow(
             tok_expires = saved.get("expires_in")
             if isinstance(tok_expires, int | float):
                 saved["expires_at"] = int(wall_now()) + int(tok_expires)
-            write_secret_json(path, saved)
+            try:
+                write_secret_json(path, saved)
+            except OSError:
+                raise AuthError("OAuth token could not be saved to disk") from None
             return path
 
         err = str(token_body.get("error") or "")

@@ -359,3 +359,45 @@ def test_cli_auth_oauth_missing_env_in_non_tty_returns_error(tmp_path, monkeypat
     assert rc == 1
     err = capsys.readouterr().err
     assert "PLAYLISTER_OAUTH_CLIENT_ID" in err
+
+
+def test_device_flow_converts_save_oserror_to_auth_error(tmp_path, monkeypatch):
+    target = tmp_path / "auth.json"
+    session = _FakeSession(
+        [
+            _FakeResponse(
+                200,
+                {
+                    "device_code": "dev",
+                    "user_code": "ABCD-EFGH",
+                    "verification_url": "https://www.google.com/device",
+                    "expires_in": 60,
+                    "interval": 1,
+                },
+            ),
+            _FakeResponse(
+                200,
+                {
+                    "access_token": "ya29.TOK",
+                    "refresh_token": "1//REF",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                },
+            ),
+        ]
+    )
+
+    def fail_write(*args, **kwargs):
+        raise PermissionError("read-only filesystem")
+
+    monkeypatch.setattr("playlister.oauth.write_secret_json", fail_write)
+    with pytest.raises(AuthError, match="could not be saved"):
+        run_device_flow(
+            target,
+            client_id="cid",
+            client_secret="sec",
+            session=session,  # type: ignore[arg-type]
+            sleep=lambda _: None,
+            now=lambda: 0.0,
+            notify=lambda _: None,
+        )

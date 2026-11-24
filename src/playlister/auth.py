@@ -138,17 +138,24 @@ def resolve_auth() -> AuthConfig:
     return AuthConfig(path=path, kind="browser", brand_account=brand)
 
 
+def build_public_ytmusic():
+    """Construct an unauthenticated ``YTMusic`` client for public catalog/radio calls."""
+    from ytmusicapi import YTMusic
+
+    return YTMusic()
+
+
 def build_ytmusic(config: AuthConfig):
     """Construct a ``YTMusic`` client.
 
     In OAuth mode, ytmusicapi is always unauthenticated (catalog search and
     radio only); account operations use the official YouTube Data API v3.
     """
-    from ytmusicapi import YTMusic
-
     if config.kind == "browser" and config.path is not None:
+        from ytmusicapi import YTMusic
+
         extra: dict[str, object] = {}
         if config.brand_account:
             extra["user"] = config.brand_account
         return YTMusic(str(config.path), **extra)
-    return YTMusic()
+    return build_public_ytmusic()
