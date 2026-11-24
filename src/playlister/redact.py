@@ -10,7 +10,7 @@ _SECRET = re.compile(
     r"client_secret|client_id|sapisid|hsid|ssid|sid|__secure-1psid|"
     r"__secure-3psid|visitor_data)\b\s*[:=]\s*\S+"
 )
-_BARE_TOKEN = re.compile(r"\bya29\.[A-Za-z0-9_\-\.]+")
+_BARE_TOKEN = re.compile(r"(?:\bya29\.[A-Za-z0-9_\-\.]+|(?<![A-Za-z0-9_])1//[A-Za-z0-9_\-\.]+)")
 _LONG_COOKIE = re.compile(r"(?i)(SAPISID|HSID|SSID|SID|LOGIN_INFO)=[^;\s]+")
 
 

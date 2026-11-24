@@ -1,4 +1,4 @@
-"""Load a local ytmusicapi auth file. The file body is never logged."""
+"""Load a local auth file (browser headers or Google OAuth). Never log secrets."""
 
 from __future__ import annotations
 
@@ -33,6 +33,14 @@ def _is_file(path: Path) -> bool:
         return path.is_file()
     except OSError:
         return False
+
+
+def default_auth_path() -> Path:
+    """Target path for auth files: PLAYLISTER_AUTH_PATH or ~/.config/playlister/auth.json."""
+    raw = os.environ.get("PLAYLISTER_AUTH_PATH")
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".config" / "playlister" / "auth.json"
 
 
 def auth_path_from_env() -> Path | None:
@@ -72,15 +80,22 @@ def _tighten(path: Path) -> None:
         try:
             path.chmod(stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
-            # Still refuse to print the file. The caller can keep going;
-            # the user is told once, without the path's contents.
             raise AuthError(
                 "Auth file is readable by other users and could not be changed to mode 600"
             ) from None
 
 
+def _is_oauth_payload(loaded: dict[str, object]) -> bool:
+    """Distinguish Google OAuth token JSON from browser-header JSON."""
+    if "refresh_token" in loaded:
+        return True
+    return "access_token" in loaded and any(
+        key in loaded for key in ("token_type", "expires_at", "expires_in", "scope")
+    )
+
+
 def resolve_auth() -> AuthConfig:
-    """Return how to construct ``YTMusic``. Does not open a network connection."""
+    """Inspect the local auth file and environment without opening the network."""
     path = auth_path_from_env()
     brand = os.environ.get("PLAYLISTER_BRAND_ACCOUNT") or None
     if path is None:
@@ -92,7 +107,7 @@ def resolve_auth() -> AuthConfig:
     if not exists:
         raise AuthError(
             "PLAYLISTER_AUTH_PATH does not point at a file. "
-            "Create it with `ytmusicapi browser` or `ytmusicapi oauth` "
+            "Create it with `playlister auth oauth` or `ytmusicapi browser` "
             "(see the README) and chmod 600 it."
         )
     _tighten(path)
@@ -105,7 +120,7 @@ def resolve_auth() -> AuthConfig:
     if not isinstance(loaded, dict):
         raise AuthError("Auth file must be a JSON object")
 
-    if "refresh_token" in loaded or ("access_token" in loaded and "token_type" in loaded):
+    if _is_oauth_payload(loaded):
         client_id = os.environ.get("PLAYLISTER_OAUTH_CLIENT_ID")
         client_secret = os.environ.get("PLAYLISTER_OAUTH_CLIENT_SECRET")
         if not client_id or not client_secret:
@@ -124,21 +139,16 @@ def resolve_auth() -> AuthConfig:
 
 
 def build_ytmusic(config: AuthConfig):
-    """Construct a ``YTMusic`` client. Import is local so tests can skip it."""
-    from ytmusicapi import OAuthCredentials, YTMusic
+    """Construct a ``YTMusic`` client.
 
-    extra: dict = {}
-    if config.brand_account:
-        extra["user"] = config.brand_account
-    if config.kind == "anonymous" or config.path is None:
-        return YTMusic(**extra)
-    if config.kind == "browser":
+    In OAuth mode, ytmusicapi is always unauthenticated (catalog search and
+    radio only); account operations use the official YouTube Data API v3.
+    """
+    from ytmusicapi import YTMusic
+
+    if config.kind == "browser" and config.path is not None:
+        extra: dict[str, object] = {}
+        if config.brand_account:
+            extra["user"] = config.brand_account
         return YTMusic(str(config.path), **extra)
-    return YTMusic(
-        str(config.path),
-        oauth_credentials=OAuthCredentials(
-            client_id=config.oauth_client_id or "",
-            client_secret=config.oauth_client_secret or "",
-        ),
-        **extra,
-    )
+    return YTMusic()
