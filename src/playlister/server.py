@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from playlister import __version__
 from playlister.auth import AuthError
+from playlister.data_api import DataAPIError
 from playlister.parser import parse_tracklist
 from playlister.redact import public_error
 from playlister.youtube import get_youtube
@@ -20,7 +21,7 @@ playlister turns a tracklist the user pasted in chat into a YouTube Music
 playlist on the user's own account. It runs locally. Never ask the user to
 paste cookies, headers, or OAuth tokens into the chat.
 
-Use this order:
+Use this order when building a playlist:
 1. parse_tracklist, when you want to show how a messy list was read.
 2. match_tracklist. This is a dry run and writes nothing. It returns each row
    as matched, needs_review, or not_found, with a confidence score, the chosen
@@ -33,19 +34,21 @@ Use this order:
    which ids are new. Pass commit=true only after the user agrees. Do not add
    needs_review rows unless the user explicitly accepted that video id.
 
-Only video ids from matched rows (plus ids the user picked) belong in the
-write. Search and matching work without auth; library reads and writes need
-PLAYLISTER_AUTH_PATH on the machine running the server.
+remove_playlist_tracks and rate_track also preview unless commit=true.
+get_similar_tracks finds radio/similar tracks anonymously without auth.
+Search, matching, and get_similar_tracks work without auth; account reads and
+writes need local auth (OAuth via YouTube Data API v3 or browser headers).
 """.strip()
 
 Order = Literal["artist-title", "title-artist"]
 SearchFilter = Literal["songs", "videos"]
 Privacy = Literal["PRIVATE", "UNLISTED", "PUBLIC"]
+Rating = Literal["like", "dislike", "none"]
 
 
 def _fail(exc: Exception) -> dict[str, Any]:
-    """Tool error. Auth and value errors stay as written; others are redacted."""
-    if isinstance(exc, (AuthError, ValueError)):
+    """Tool error. Auth, Data API, and value errors stay as written; others are redacted."""
+    if isinstance(exc, AuthError | DataAPIError | ValueError):
         return {"ok": False, "error": str(exc)}
     return {"ok": False, "error": public_error(exc)}
 
@@ -96,10 +99,22 @@ def match_tracklist_tool(
         return _fail(exc)
 
 
+def get_similar_tracks(video_id: str, limit: int = 20) -> dict[str, Any]:
+    """Return similar / radio tracks for a seed video_id without auth.
+
+    Uses YouTube Music radio (get_watch_playlist) anonymously and consumes no
+    YouTube Data API quota. Does not modify the library.
+    """
+    try:
+        return get_youtube().get_similar_tracks(video_id, limit=limit)
+    except Exception as exc:
+        return _fail(exc)
+
+
 def list_playlists(limit: int = 25) -> dict[str, Any]:
     """List playlists in the user's YouTube Music library. Requires auth.
 
-    limit is how many to return. Does not modify the library.
+    limit is how many to return (0 returns all). Does not modify the library.
     """
     try:
         return get_youtube().list_playlists(limit=limit)
@@ -108,10 +123,10 @@ def list_playlists(limit: int = 25) -> dict[str, Any]:
 
 
 def get_playlist(playlist_id: str, limit: int = 100) -> dict[str, Any]:
-    """Return playlist metadata and tracks.
+    """Return playlist metadata and tracks (including playlist_item_id).
 
-    limit is the maximum number of tracks. Pass 0 to read the whole playlist
-    (used internally for dedupe). Does not modify the playlist.
+    limit is the maximum number of tracks. Pass 0 to read the whole playlist.
+    Does not modify the playlist.
     """
     try:
         return get_youtube().get_playlist(playlist_id, limit=limit)
@@ -148,18 +163,57 @@ def add_playlist_tracks(
     Preview unless commit is true. would_add is what a commit would send;
     skipped_duplicates were already on the playlist or repeated in video_ids.
     Pass only ids the user confirmed (matched rows, or a needs_review
-    alternative they picked). Duplicates are always removed first: YouTube
-    Music rejects the whole batch if any id is already present. If a later
-    chunk fails, added lists the ids that were written and not_added lists
-    the rest. If a reply is lost, the playlist is re-read; when that also
-    fails, the in-flight chunk is returned as uncertain rather than not_added.
-    A playlist created a moment ago may not be browsable yet. That read is
-    retried for a few seconds. If it is still unreadable, dedupe treats the
-    new playlist as empty, until a write to it has been attempted. The add
-    itself is not retried.
+    alternative they picked). Duplicates are always removed first. If a later
+    write fails, added lists the ids that were written and not_added lists the
+    rest. In OAuth mode each added video uses 50 YouTube Data API quota units.
     """
     try:
         return get_youtube().add_tracks(playlist_id, video_ids, commit=commit)
+    except Exception as exc:
+        return _fail(exc)
+
+
+def remove_playlist_tracks(
+    playlist_id: str,
+    video_ids: list[str],
+    commit: bool = False,
+) -> dict[str, Any]:
+    """Remove tracks from a playlist by video_id. Preview unless commit is true.
+
+    Reads the playlist to resolve each video_id to its playlist_item_id.
+    With commit false, returns would_remove, would_remove_items, and not_found
+    without modifying the playlist. In OAuth mode each deleted item uses 50
+    YouTube Data API quota units.
+    """
+    try:
+        return get_youtube().remove_tracks(playlist_id, video_ids, commit=commit)
+    except Exception as exc:
+        return _fail(exc)
+
+
+def get_track_ratings(video_ids: list[str]) -> dict[str, Any]:
+    """Check your like/dislike/none rating for video ids (requires OAuth).
+
+    Calls YouTube Data API v3 videos.getRating in batches of up to 50 ids
+    (1 quota unit per batch). Does not modify anything.
+    """
+    try:
+        return get_youtube().get_track_ratings(video_ids)
+    except Exception as exc:
+        return _fail(exc)
+
+
+def rate_track(
+    video_id: str,
+    rating: Rating,
+    commit: bool = False,
+) -> dict[str, Any]:
+    """Rate a track ('like', 'dislike', or 'none'). Preview unless commit is true.
+
+    Requires auth. In OAuth mode this uses 50 YouTube Data API quota units.
+    """
+    try:
+        return get_youtube().rate_track(video_id, rating, commit=commit)
     except Exception as exc:
         return _fail(exc)
 
@@ -168,10 +222,14 @@ TOOL_FUNCTIONS = (
     search_tracks,
     parse_tracklist_tool,
     match_tracklist_tool,
+    get_similar_tracks,
     list_playlists,
     get_playlist,
     create_playlist,
     add_playlist_tracks,
+    remove_playlist_tracks,
+    get_track_ratings,
+    rate_track,
 )
 
 # Public tool names. parse/match keep the names a client should call; the
@@ -180,10 +238,14 @@ TOOL_NAMES = (
     "search_tracks",
     "parse_tracklist",
     "match_tracklist",
+    "get_similar_tracks",
     "list_playlists",
     "get_playlist",
     "create_playlist",
     "add_playlist_tracks",
+    "remove_playlist_tracks",
+    "get_track_ratings",
+    "rate_track",
 )
 
 
@@ -199,10 +261,14 @@ def build_server():
     mcp.tool(name="parse_tracklist")(parse_tracklist_tool)
     mcp.tool(name="match_tracklist")(match_tracklist_tool)
     mcp.tool()(search_tracks)
+    mcp.tool()(get_similar_tracks)
     mcp.tool()(list_playlists)
     mcp.tool()(get_playlist)
     mcp.tool()(create_playlist)
     mcp.tool()(add_playlist_tracks)
+    mcp.tool()(remove_playlist_tracks)
+    mcp.tool()(get_track_ratings)
+    mcp.tool()(rate_track)
     return mcp
 
 

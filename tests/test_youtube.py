@@ -434,3 +434,344 @@ def test_bad_privacy_is_rejected_without_a_write():
     result = yt.create_playlist("X", privacy="FRIENDS", commit=True)
     assert result["ok"] is False
     assert fake.created == []
+
+
+class FakeDataAPI:
+    def __init__(self) -> None:
+        self.playlists: dict[str, dict] = {
+            "PLoauth": {
+                "ok": True,
+                "playlist_id": "PLoauth",
+                "title": "OAuth List",
+                "description": "",
+                "privacy": "PRIVATE",
+                "track_count": 2,
+                "author": "me",
+                "tracks": [
+                    {
+                        "video_id": "keep",
+                        "playlist_item_id": "PLI_keep",
+                        "title": "Keep",
+                        "artists": ["A"],
+                        "channel": "A - Topic",
+                        "album": None,
+                        "duration": None,
+                        "duration_seconds": None,
+                        "result_type": None,
+                    },
+                    {
+                        "video_id": "drop",
+                        "playlist_item_id": "PLI_drop",
+                        "title": "Drop",
+                        "artists": ["B"],
+                        "channel": "B - Topic",
+                        "album": None,
+                        "duration": None,
+                        "duration_seconds": None,
+                        "result_type": None,
+                    },
+                ],
+            }
+        }
+        self.created: list[tuple[str, str, str]] = []
+        self.inserted: list[tuple[str, str]] = []
+        self.deleted: list[str] = []
+        self.rated: list[tuple[str, str]] = []
+
+    def list_playlists(self, limit: int = 25):
+        return [
+            {
+                "playlist_id": pid,
+                "title": p["title"],
+                "count": p["track_count"],
+                "owned": True,
+                "privacy": p["privacy"],
+            }
+            for pid, p in list(self.playlists.items())[: limit or None]
+        ]
+
+    def get_playlist(self, playlist_id: str, limit: int = 100):
+        from playlister.data_api import DataAPIError
+
+        if playlist_id not in self.playlists:
+            raise DataAPIError("Playlist not found", status_code=404, reason="playlistNotFound")
+        p = self.playlists[playlist_id]
+        tracks = p["tracks"][: limit or None]
+        return {**p, "tracks": list(tracks)}
+
+    def create_playlist(self, title: str, description: str = "", privacy: str = "PRIVATE") -> str:
+        self.created.append((title, description, privacy))
+        pid = "PLoauth_new"
+        self.playlists[pid] = {
+            "ok": True,
+            "playlist_id": pid,
+            "title": title,
+            "description": description,
+            "privacy": privacy,
+            "track_count": 0,
+            "author": "me",
+            "tracks": [],
+        }
+        return pid
+
+    def insert_playlist_item(self, playlist_id: str, video_id: str):
+        self.inserted.append((playlist_id, video_id))
+        item_id = f"PLI_{video_id}"
+        self.playlists[playlist_id]["tracks"].append(
+            {
+                "video_id": video_id,
+                "playlist_item_id": item_id,
+                "title": video_id,
+                "artists": [],
+                "channel": None,
+                "album": None,
+                "duration": None,
+                "duration_seconds": None,
+                "result_type": None,
+            }
+        )
+        return {"id": item_id}
+
+    def delete_playlist_item(self, playlist_item_id: str) -> None:
+        self.deleted.append(playlist_item_id)
+        for p in self.playlists.values():
+            p["tracks"] = [t for t in p["tracks"] if t["playlist_item_id"] != playlist_item_id]
+
+    def get_video_ratings(self, video_ids: list[str]):
+        return [
+            {"video_id": vid, "rating": "like" if vid == "keep" else "none"} for vid in video_ids
+        ]
+
+    def rate_video(self, video_id: str, rating: str) -> None:
+        self.rated.append((video_id, rating))
+
+
+def test_oauth_hybrid_routes_account_ops_to_data_api_and_catalog_to_ytmusic():
+    fake_yt = FakeYT()
+    fake_yt.get_watch_playlist = lambda videoId, radio=False, limit=25: {  # type: ignore[attr-defined]
+        "tracks": [
+            {"videoId": videoId, "title": "Seed", "artists": [{"name": "Oasis"}], "length": "4:19"},
+            {
+                "videoId": "sim1",
+                "title": "Don't Look Back In Anger",
+                "artists": [{"name": "Oasis"}],
+                "album": {"name": "Morning Glory"},
+                "length": "4:48",
+            },
+            {
+                "videoId": "sim1",
+                "title": "Duplicate",
+                "artists": [{"name": "Oasis"}],
+                "length": "4:48",
+            },
+            {
+                "videoId": "sim2",
+                "title": "Mr. Brightside",
+                "artists": [{"name": "The Killers"}],
+                "length": "3:43",
+            },
+        ]
+    }
+    data_api = FakeDataAPI()
+    yt = YouTubeMusic(fake_yt, authenticated=True, data_api=data_api)
+
+    # Catalog stays on ytmusicapi
+    found = yt.search_public("Oasis Wonderwall")
+    assert found["ok"] is True
+    assert found["results"][0]["video_id"] == "song1"
+
+    similar = yt.get_similar_tracks("song1", limit=2)
+    assert similar["ok"] is True
+    assert similar["seed_video_id"] == "song1"
+    assert [t["video_id"] for t in similar["tracks"]] == ["sim1", "sim2"]
+    assert similar["tracks"][0]["duration"] == "4:48"
+
+    # Account ops go through Data API
+    listed = yt.list_playlists()
+    assert listed["ok"] is True
+    assert listed["playlists"][0]["playlist_id"] == "PLoauth"
+
+    created = yt.create_playlist("New OAuth", "desc", commit=True)
+    assert created["ok"] is True
+    assert created["playlist_id"] == "PLoauth_new"
+    assert data_api.created == [("New OAuth", "desc", "PRIVATE")]
+    assert fake_yt.created == []
+
+    preview_add = yt.add_tracks("PLoauth", ["keep", "new1", "new1"], commit=False)
+    assert preview_add["would_add"] == ["new1"]
+    assert preview_add["skipped_duplicates"] == ["keep", "new1"]
+    assert data_api.inserted == []
+
+    added = yt.add_tracks("PLoauth", ["keep", "new1"], commit=True)
+    assert added["ok"] is True
+    assert added["added"] == ["new1"]
+    assert data_api.inserted == [("PLoauth", "new1")]
+    assert fake_yt.added == []
+
+    preview_rm = yt.remove_tracks("PLoauth", ["drop", "missing"], commit=False)
+    assert preview_rm["commit"] is False
+    assert preview_rm["would_remove"] == ["drop"]
+    assert preview_rm["would_remove_items"] == [
+        {"video_id": "drop", "playlist_item_id": "PLI_drop"}
+    ]
+    assert preview_rm["not_found"] == ["missing"]
+    assert data_api.deleted == []
+
+    removed = yt.remove_tracks("PLoauth", ["drop", "missing"], commit=True)
+    assert removed["ok"] is True
+    assert removed["removed"] == ["drop"]
+    assert removed["not_found"] == ["missing"]
+    assert data_api.deleted == ["PLI_drop"]
+
+    ratings = yt.get_track_ratings(["keep", "new1"])
+    assert ratings == {
+        "ok": True,
+        "ratings": [
+            {"video_id": "keep", "rating": "like"},
+            {"video_id": "new1", "rating": "none"},
+        ],
+    }
+
+    rate_preview = yt.rate_track("new1", "like", commit=False)
+    assert rate_preview["commit"] is False
+    assert data_api.rated == []
+
+    rated = yt.rate_track("new1", "LIKE", commit=True)
+    assert rated == {"ok": True, "commit": True, "video_id": "new1", "rating": "like"}
+    assert data_api.rated == [("new1", "like")]
+
+
+def test_oauth_add_reports_quota_exceeded_partial_progress():
+    from playlister.data_api import QuotaExceededError
+
+    fake_yt = FakeYT()
+    data_api = FakeDataAPI()
+    calls = {"n": 0}
+    original = data_api.insert_playlist_item
+
+    def fail_second(playlist_id: str, video_id: str):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise QuotaExceededError("YouTube Data API daily quota exceeded (10,000 units/day)")
+        return original(playlist_id, video_id)
+
+    data_api.insert_playlist_item = fail_second  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake_yt, authenticated=True, data_api=data_api)
+    result = yt.add_tracks("PLoauth", ["v1", "v2", "v3"], commit=True)
+    assert result["ok"] is False
+    assert "quota exceeded" in result["error"].lower()
+    assert result["added"] == ["v1"]
+    assert result["not_added"] == ["v2", "v3"]
+
+
+def test_oauth_fresh_playlist_404_retried_and_falls_back_to_empty():
+    clear_fresh_playlists()
+    fake_yt = FakeYT()
+    data_api = FakeDataAPI()
+    orig_create = data_api.create_playlist
+
+    def create_delayed(title: str, description: str = "", privacy: str = "PRIVATE") -> str:
+        pid = orig_create(title, description, privacy)
+        del data_api.playlists[pid]  # Simulate eventual consistency 404 on immediate read
+        return pid
+
+    data_api.create_playlist = create_delayed  # type: ignore[method-assign]
+    data_api.insert_playlist_item = lambda pid, vid: {"id": f"PLI_{vid}"}  # type: ignore[method-assign]
+    yt = YouTubeMusic(fake_yt, authenticated=True, data_api=data_api)
+    delays = _no_wait(yt)
+
+    created = yt.create_playlist("Fresh", commit=True)
+    added = yt.add_tracks(created["playlist_id"], ["v1"], commit=True)
+    assert added["ok"] is True
+    assert added["added"] == ["v1"]
+    assert delays == [0.5, 1.0, 2.0, 4.0]
+    clear_fresh_playlists()
+
+
+def test_browser_mode_remove_rate_and_ratings_guidance():
+    fake = FakeYT()
+    fake.playlists["PLexisting"]["tracks"][0]["setVideoId"] = "SET_keep"
+    removed_calls: list[tuple] = []
+    rated_calls: list[tuple] = []
+
+    def remove_items(playlistId, videos):
+        removed_calls.append((playlistId, videos))
+        return "STATUS_SUCCEEDED"
+
+    def rate_song(videoId, rating="INDIFFERENT"):
+        rated_calls.append((videoId, rating))
+        return {}
+
+    fake.remove_playlist_items = remove_items  # type: ignore[attr-defined]
+    fake.rate_song = rate_song  # type: ignore[attr-defined]
+    yt = YouTubeMusic(fake, authenticated=True)
+
+    playlist = yt.get_playlist("PLexisting")
+    assert playlist["tracks"][0]["playlist_item_id"] == "SET_keep"
+
+    removed = yt.remove_tracks("PLexisting", ["keep"], commit=True)
+    assert removed["ok"] is True
+    assert removed["removed"] == ["keep"]
+    assert removed_calls == [("PLexisting", [{"videoId": "keep", "setVideoId": "SET_keep"}])]
+
+    rated = yt.rate_track("keep", "none", commit=True)
+    assert rated["ok"] is True
+    assert rated_calls == [("keep", "INDIFFERENT")]
+
+    ratings = yt.get_track_ratings(["keep"])
+    assert ratings["ok"] is False
+    assert "OAuth" in ratings["error"]
+
+
+def test_anonymous_can_use_get_similar_tracks_but_not_ratings_or_writes():
+    fake = FakeYT()
+    fake.get_watch_playlist = lambda videoId, radio=False, limit=25: {  # type: ignore[attr-defined]
+        "tracks": [
+            {"videoId": videoId, "title": "Seed", "artists": [{"name": "A"}], "length": "3:00"},
+            {"videoId": "rel1", "title": "Next", "artists": [{"name": "B"}], "length": "3:30"},
+        ]
+    }
+    yt = YouTubeMusic(fake, authenticated=False)
+
+    sim = yt.get_similar_tracks("seed1", limit=5)
+    assert sim["ok"] is True
+    assert [t["video_id"] for t in sim["tracks"]] == ["rel1"]
+
+    assert yt.get_track_ratings(["seed1"])["ok"] is False
+    assert yt.rate_track("seed1", "like", commit=True)["ok"] is False
+
+
+def test_from_env_builds_hybrid_client_for_oauth(tmp_path, monkeypatch):
+    import json
+
+    import ytmusicapi
+
+    auth = tmp_path / "oauth.json"
+    auth.write_text(
+        json.dumps(
+            {
+                "access_token": "ya29.TOK",
+                "refresh_token": "1//REF",
+                "refresh_token_expires_in": 604800,
+                "token_type": "Bearer",
+            }
+        ),
+        encoding="utf-8",
+    )
+    auth.chmod(0o600)
+    monkeypatch.setenv("PLAYLISTER_AUTH_PATH", str(auth))
+    monkeypatch.setenv("PLAYLISTER_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("PLAYLISTER_OAUTH_CLIENT_SECRET", "csec")
+
+    yt_init_calls: list[tuple[tuple, dict]] = []
+
+    class _StubYT:
+        def __init__(self, *args, **kwargs):
+            yt_init_calls.append((args, kwargs))
+
+    monkeypatch.setattr(ytmusicapi, "YTMusic", _StubYT)
+
+    client = YouTubeMusic.from_env()
+    assert client.authenticated is True
+    assert client._data_api is not None
+    assert yt_init_calls == [((), {})]
