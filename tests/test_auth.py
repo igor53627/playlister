@@ -115,11 +115,68 @@ def test_prepare_auth_file_tightens_without_reading_secrets(tmp_path, monkeypatc
 
 
 def test_redact_strips_tokens_from_errors():
-    text = redact("Authorization: Bearer ya29.SECRET stuff Cookie=SAPISID=abc")
+    text = redact("Authorization: Bearer ya29.SECRET stuff Cookie=SAPISID=abc 1//REFRESH_XYZ")
     assert "ya29.SECRET" not in text
+    assert "1//REFRESH_XYZ" not in text
     assert "abc" not in text or "SAPISID=[redacted]" in text
     try:
         raise RuntimeError("failed access_token=ya29.SECRET for user")
     except RuntimeError as exc:
         public = public_error(exc)
     assert "ya29.SECRET" not in public
+
+
+def test_oauth_detection_with_refresh_token_expires_in_and_extra_fields(tmp_path, monkeypatch):
+    auth = tmp_path / "oauth.json"
+    auth.write_text(
+        json.dumps(
+            {
+                "access_token": "ya29.ACCESS",
+                "refresh_token": "1//REFRESH",
+                "expires_at": 9999999999,
+                "expires_in": 3599,
+                "refresh_token_expires_in": 604799,
+                "scope": "https://www.googleapis.com/auth/youtube",
+                "token_type": "Bearer",
+                "unknown_field": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    auth.chmod(0o600)
+    monkeypatch.setenv("PLAYLISTER_AUTH_PATH", str(auth))
+    monkeypatch.setenv("PLAYLISTER_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("PLAYLISTER_OAUTH_CLIENT_SECRET", "csec")
+    config = resolve_auth()
+    assert config.kind == "oauth"
+
+
+def test_build_ytmusic_is_unauthenticated_in_oauth_mode(tmp_path, monkeypatch):
+    import ytmusicapi
+
+    from playlister.auth import AuthConfig, build_ytmusic
+
+    calls: list[tuple[tuple, dict]] = []
+
+    class _StubYTMusic:
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    monkeypatch.setattr(ytmusicapi, "YTMusic", _StubYTMusic)
+
+    oauth_path = tmp_path / "oauth.json"
+    oauth_path.write_text("{}", encoding="utf-8")
+    build_ytmusic(
+        AuthConfig(
+            path=oauth_path,
+            kind="oauth",
+            oauth_client_id="cid",
+            oauth_client_secret="csec",
+        )
+    )
+    assert calls[-1] == ((), {})
+
+    browser_path = tmp_path / "browser.json"
+    browser_path.write_text("{}", encoding="utf-8")
+    build_ytmusic(AuthConfig(path=browser_path, kind="browser", brand_account="brand123"))
+    assert calls[-1] == ((str(browser_path),), {"user": "brand123"})

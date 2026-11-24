@@ -113,3 +113,78 @@ def test_stdio_server_lists_its_tools():
     assert set(TOOL_NAMES) <= set(names)
     assert "match_tracklist" in names
     assert "add_playlist_tracks" in names
+    assert "remove_playlist_tracks" in names
+    assert "get_track_ratings" in names
+    assert "rate_track" in names
+    assert "get_similar_tracks" in names
+
+
+def test_new_server_tool_wrappers():
+    from playlister.server import (
+        get_similar_tracks,
+        get_track_ratings,
+        rate_track,
+        remove_playlist_tracks,
+    )
+
+    class _FakeCatalog:
+        def get_watch_playlist(self, videoId, radio=False, limit=25):
+            return {
+                "tracks": [
+                    {"videoId": videoId, "title": "Seed", "artists": [{"name": "A"}]},
+                    {
+                        "videoId": "sim1",
+                        "title": "Similar",
+                        "artists": [{"name": "B"}],
+                        "length": "3:20",
+                    },
+                ]
+            }
+
+    class _FakeData:
+        def get_playlist(self, playlist_id, limit=100):
+            return {
+                "ok": True,
+                "playlist_id": playlist_id,
+                "title": "List",
+                "description": "",
+                "privacy": "PRIVATE",
+                "track_count": 1,
+                "author": "me",
+                "tracks": [
+                    {
+                        "video_id": "v1",
+                        "playlist_item_id": "PLI1",
+                        "title": "T",
+                        "artists": ["A"],
+                    }
+                ],
+            }
+
+        def delete_playlist_item(self, item_id):
+            pass
+
+        def get_video_ratings(self, video_ids):
+            return [{"video_id": vid, "rating": "like"} for vid in video_ids]
+
+        def rate_video(self, video_id, rating):
+            pass
+
+    set_client_factory(
+        lambda: YouTubeMusic(_FakeCatalog(), authenticated=True, data_api=_FakeData())
+    )
+    try:
+        sim = get_similar_tracks("seed", limit=5)
+        rm = remove_playlist_tracks("PL1", ["v1"], commit=False)
+        ratings = get_track_ratings(["v1"])
+        rated = rate_track("v1", "like", commit=False)
+    finally:
+        set_client_factory(None)
+
+    assert sim["ok"] is True
+    assert sim["tracks"][0]["video_id"] == "sim1"
+    assert rm["ok"] is True
+    assert rm["would_remove"] == ["v1"]
+    assert ratings == {"ok": True, "ratings": [{"video_id": "v1", "rating": "like"}]}
+    assert rated["ok"] is True
+    assert rated["commit"] is False

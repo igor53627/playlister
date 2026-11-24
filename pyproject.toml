@@ -21,6 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=2.3,<3",
+    "requests>=2.31",
     "ytmusicapi>=1.11.0",
 ]
 
