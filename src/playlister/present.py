@@ -124,12 +124,8 @@ def lost_remove_response(
     longer present count as removed. Otherwise the in-flight items are reported
     as ``uncertain`` and unattempted items stay in ``not_removed``.
     """
-    if refreshed.get("ok"):
-        present_ids = {
-            str(track["playlist_item_id"])
-            for track in refreshed["tracks"]
-            if track.get("playlist_item_id")
-        }
+    if refreshed.get("ok") and all(track.get("playlist_item_id") for track in refreshed["tracks"]):
+        present_ids = {str(track["playlist_item_id"]) for track in refreshed["tracks"]}
         return {
             "ok": False,
             "error": error,

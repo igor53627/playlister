@@ -890,3 +890,30 @@ def test_browser_lost_remove_reply_marks_uncertain_when_reread_fails():
     assert result["removed"] == []
     assert result["uncertain"] == ["keep"]
     assert result["not_removed"] == []
+
+
+def test_lost_remove_reread_missing_item_ids_falls_back_to_uncertain():
+    fake = FakeYT()
+    fake.playlists["PLexisting"]["tracks"][0]["setVideoId"] = "SET_keep"
+    reads = {"n": 0}
+
+    def get_without_id(*args, **kwargs):
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return fake.playlists["PLexisting"]
+        return {
+            **fake.playlists["PLexisting"],
+            "tracks": [{"videoId": "keep", "title": "Keep", "artists": [{"name": "A"}]}],
+        }
+
+    def boom_remove(*args, **kwargs):
+        raise TimeoutError("reply lost")
+
+    fake.get_playlist = get_without_id  # type: ignore[method-assign]
+    fake.remove_playlist_items = boom_remove  # type: ignore[attr-defined]
+    yt = YouTubeMusic(fake, authenticated=True)
+    result = yt.remove_tracks("PLexisting", ["keep"], commit=True)
+    assert result["ok"] is False
+    assert result["removed"] == []
+    assert result["uncertain"] == ["keep"]
+    assert result["not_removed"] == []
