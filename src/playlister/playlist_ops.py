@@ -23,7 +23,7 @@ _ADD_CHUNK = 50
 
 
 def format_error(exc: Exception) -> str:
-    if isinstance(exc, AuthError | DataAPIError | ValueError):
+    if isinstance(exc, AuthError | DataAPIError):
         return str(exc)
     return public_error(exc)
 

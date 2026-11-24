@@ -401,3 +401,46 @@ def test_device_flow_converts_save_oserror_to_auth_error(tmp_path, monkeypatch):
             now=lambda: 0.0,
             notify=lambda _: None,
         )
+
+
+def test_token_manager_rejects_control_chars_in_access_token(tmp_path):
+    token_path = tmp_path / "auth.json"
+    token_path.write_text(
+        json.dumps(
+            {
+                "access_token": "ya29.SECRET\r\nX-Injected: 1",
+                "refresh_token": "1//REF",
+                "expires_at": 9_999,
+                "token_type": "Bearer",
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = OAuthTokenManager(
+        token_path,
+        client_id="cid",
+        client_secret="sec",
+        session=_FakeSession([]),  # type: ignore[arg-type]
+        now=lambda: 100.0,
+    )
+    with pytest.raises(AuthError) as caught:
+        manager.get_access_token()
+    assert "ya29.SECRET" not in str(caught.value)
+    assert "invalid access_token" in str(caught.value)
+
+
+def test_format_error_and_server_fail_redact_invalid_header_valueerror():
+    from playlister.playlist_ops import format_error
+    from playlister.server import _fail
+
+    exc = requests.exceptions.InvalidHeader(
+        "Invalid return character or leading space in header: Bearer ya29.LEAKED_SECRET"
+    )
+    formatted = format_error(exc)
+    assert "ya29.LEAKED_SECRET" not in formatted
+    assert formatted == "InvalidHeader"
+
+    failed = _fail(exc)
+    assert failed["ok"] is False
+    assert "ya29.LEAKED_SECRET" not in failed["error"]
+    assert failed["error"] == "InvalidHeader"

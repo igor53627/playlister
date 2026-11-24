@@ -47,8 +47,8 @@ Rating = Literal["like", "dislike", "none"]
 
 
 def _fail(exc: Exception) -> dict[str, Any]:
-    """Tool error. Auth, Data API, and value errors stay as written; others are redacted."""
-    if isinstance(exc, AuthError | DataAPIError | ValueError):
+    """Tool error. Only app-owned errors and plain ValueError pass through unredacted."""
+    if isinstance(exc, AuthError | DataAPIError) or type(exc) is ValueError:
         return {"ok": False, "error": str(exc)}
     return {"ok": False, "error": public_error(exc)}
 

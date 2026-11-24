@@ -122,6 +122,11 @@ class OAuthTokenManager:
             raise AuthError(
                 "OAuth auth file has no access_token. Run `playlister auth oauth` to authenticate."
             )
+        if "\r" in access_token or "\n" in access_token:
+            raise AuthError(
+                "OAuth auth file contains an invalid access_token. "
+                "Run `playlister auth oauth` to re-authenticate."
+            )
         return access_token
 
     def refresh(self) -> dict[str, Any]:

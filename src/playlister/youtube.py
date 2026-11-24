@@ -159,6 +159,8 @@ class YouTubeMusic:
         try:
             hits = self.search(query, filter=filter, limit=limit)
         except Exception as exc:
+            if type(exc) is ValueError:
+                return {"ok": False, "error": str(exc)}
             return {"ok": False, "error": format_error(exc)}
         return {"ok": True, "results": [public_hit(hit) for hit in hits]}
 
@@ -172,9 +174,9 @@ class YouTubeMusic:
                 order=order,
                 search_limit=max(1, min(int(search_limit), 15)),
             )
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
         except Exception as exc:
+            if type(exc) is ValueError:
+                return {"ok": False, "error": str(exc)}
             logger.warning("match failed: %s", type(exc).__name__)
             return {"ok": False, "error": format_error(exc)}
 
